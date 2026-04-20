@@ -1,0 +1,221 @@
+/* ============================================================
+   DJ Visualizer — styles.css
+   ============================================================ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #000000;
+  overflow: hidden;
+  font-family: monospace;
+}
+
+/* ── Click-to-start overlay (AudioContext policy) ── */
+#start-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: #000010;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  transition: opacity 0.4s ease;
+}
+
+.start-content {
+  text-align: center;
+}
+
+.start-content p {
+  color: #00ffff;
+  font-family: monospace;
+  letter-spacing: 0.35em;
+  font-size: 1.4rem;
+  margin-bottom: 2rem;
+  text-shadow: 0 0 20px #00ffff66;
+}
+
+#start-btn {
+  background: transparent;
+  border: 1px solid #00ffff;
+  color: #00ffff;
+  font-family: monospace;
+  font-size: 1rem;
+  letter-spacing: 0.2em;
+  padding: 14px 40px;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+#start-btn:hover {
+  background: #00ffff22;
+  box-shadow: 0 0 20px #00ffff44;
+}
+
+/* ── Canvas ── */
+#main-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+}
+
+#webcam {
+  display: none;
+}
+
+/* ── Loading screen ── */
+#loading-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #000010;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  transition: opacity 0.5s ease;
+}
+
+.loading-content {
+  text-align: center;
+  color: white;
+}
+
+.loading-content h1 {
+  font-size: 2rem;
+  letter-spacing: 0.35em;
+  margin-bottom: 2rem;
+  color: #00ffff;
+  text-shadow: 0 0 20px #00ffff88;
+}
+
+.loading-bar {
+  width: 300px;
+  height: 4px;
+  background: #111;
+  margin: 20px auto;
+  border-radius: 2px;
+}
+
+#loading-progress {
+  height: 100%;
+  width: 0%;
+  background: #00ffff;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+#loading-status {
+  color: #555;
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  margin-top: 8px;
+}
+
+/* ── HUD overlay ── */
+#ui-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+#fps-counter {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  color: #00ff00;
+  font-size: 11px;
+  z-index: 20;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+/* BPM — top center */
+#hud-bpm {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #ffffff88;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+}
+
+/* Stem indicators — bottom left */
+#hud-stems {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  gap: 10px;
+}
+
+.stem-dot {
+  color: #333;
+  font-size: 16px;
+  transition: color 0.3s ease, text-shadow 0.3s ease;
+}
+
+#stem-drums.active  { color: #ff4444; text-shadow: 0 0 8px #ff4444; }
+#stem-bass.active   { color: #ff8800; text-shadow: 0 0 8px #ff8800; }
+#stem-melody.active { color: #ffff00; text-shadow: 0 0 8px #ffff00; }
+
+/* Planet name — centre screen, big cinematic */
+#hud-planet {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #ffffff;
+  font-size: 3.5rem;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  text-shadow: 0 0 30px rgba(0,255,255,0.7), 0 0 60px rgba(0,255,255,0.3);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* Quality level — top right */
+#hud-quality {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  color: #ffffff44;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+/* Hand tracking dots — top left (below fps) */
+#hud-hands {
+  position: absolute;
+  top: 28px;
+  left: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+.hand-dot {
+  color: #333;
+  font-size: 10px;
+  transition: color 0.2s ease;
+}
+
+.hand-dot.active {
+  color: #00ff88;
+}

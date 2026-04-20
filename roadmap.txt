@@ -1,0 +1,1812 @@
+================================================================================
+  INTERACTIVE DJ & 3D VISUALIZER — HAND TRACKING
+  ΠΛΗΡΕΣ ROADMAP — ΕΝΗΜΕΡΩΜΕΝΟ ΜΕ ΤΗΝ ΠΡΑΓΜΑΤΙΚΗ ΥΛΟΠΟΙΗΣΗ
+
+  ΑΡΧΙΤΕΚΤΟΝΙΚΗ: MediaPipe Tasks Vision 0.10.34 (local CJS) + Web Worker
+                 + Vanilla JS + Three.js r158 + Tone.js 14.8.49
+  Τελευταία ενημέρωση: 16 Απριλίου 2026
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 0: SETUP — CHECKLIST VALIDATION  ✅ ΟΛΟΚΛΗΡΩΘΗΚΕ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΒΗΜΑ 0.1 — Browser: Chrome + hardware acceleration ✅
+ΒΗΜΑ 0.2 — WebGL: Three.js τρέχει ομαλά ✅
+ΒΗΜΑ 0.3 — VS Code + Live Server (port 5500) ✅
+ΒΗΜΑ 0.4 — Audio stems κατεβασμένα (drums.mp3, bass.mp3, melody.mp3 @ 120 BPM) ✅
+ΒΗΜΑ 0.5 — Planet textures: sun.jpg, earth.jpg, mars.jpg, jupiter.jpg ✅
+
+ΣΗΜΑΝΤΙΚΟ: Τρέχει ΜΟΝΟ μέσω Live Server (http://localhost:5500).
+Web Workers + Camera access απαιτούν HTTP context.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1: FILE STRUCTURE (ΤΡΕΧΟΥΣΑ ΔΟΜΗ)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  dj-visualizer/
+  ├── index.html
+  ├── styles.css
+  ├── main.js
+  ├── roadmap.txt
+  ├── assets/
+  │   ├── audio/
+  │   │   ├── drums.mp3
+  │   │   ├── bass.mp3
+  │   │   └── melody.mp3
+  │   └── textures/
+  │       ├── sun.jpg
+  │       ├── earth.jpg
+  │       ├── mars.jpg
+  │       └── jupiter.jpg
+  └── src/
+      ├── core/
+      │   ├── StateManager.js
+      │   └── EventBus.js
+      ├── engines/
+      │   ├── GraphicsEngine.js
+      │   ├── AudioEngine.js
+      │   └── TrackingEngine.js
+      ├── workers/
+      │   ├── mediapipe.worker.js
+      │   └── vision_bundle.js      ← ΤΟΠΙΚΟ CJS bundle (δεν φορτώνει από CDN)
+      └── utils/
+          ├── GestureDetector.js
+          └── CoordinateMapper.js
+
+ΣΗΜΕΙΩΣΗ: Pure Vanilla JS — κανένα npm/Node.js. CDN μόνο για Three.js + Tone.js.
+MediaPipe φορτώνεται τοπικά λόγω Worker CORS θεμάτων (βλ. Section 9).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2: ΦΑΣΗ 1 — FOUNDATION SKELETON  ✅ ΟΛΟΚΛΗΡΩΘΗΚΕ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΤΙ ΥΛΟΠΟΙΗΘΗΚΕ:
+
+index.html:
+  - importmap: Three.js r158 + three/addons/ (jsdelivr CDN)
+  - Tone.js 14.8.49 ως classic <script> (global window.Tone)
+  - <canvas id="main-canvas"> fullscreen
+  - <video id="webcam" hidden>
+  - Start overlay (#start-overlay + #start-btn) — user click required (autoplay policy)
+  - Loading screen (#loading-screen + #loading-progress + #loading-status)
+  - Camera preview (#cam-preview + #cam-canvas 160×120, top-right, z-index 9998)
+  - HUD (#ui-overlay): hud-bpm, hud-stems, hud-planet, hud-quality, hud-hands
+  - FPS counter (#fps-counter, position top:140px right:10px)
+  - MP FPS counter (#mp-fps, κάτω από FPS counter)
+  - Debug overlay (#debug-overlay, κάτω δεξιά)
+
+styles.css:
+  - Reset + body #000, overflow hidden, monospace
+  - Canvas fullscreen, cam-preview 160×120 mirrored (scaleX(-1))
+  - Start overlay fullscreen center, HUD pointer-events none
+  - Loading bar cyan (#00ffff)
+
+StateManager.js:
+  - quality: 'low' (ΟΧΙ 'medium' — αρχίζει low για performance)
+  - hands.{left,right}: { detected, x, y, z, pinching, landmarks }
+  - audio: { drumsVolume, bassVolume, melodyVolume, filterCutoff }
+  - camera: { currentTarget, isAnimating }
+  - particles: { repulsionX, repulsionY, repulsionStrength }
+  - updateState(path, value): dot-notation, Object.assign merge
+  - getState(path): dot-notation getter
+
+EventBus.js:
+  - on(event, cb), off(event, cb), emit(event, data)
+  - Events: hands:update, gesture:pinch, gesture:fist, gesture:fingers,
+    gesture:crossFingers, gesture:frame, audio:play, audio:stop,
+    audio:volumeChange, audio:loopChange, graphics:quality
+
+main.js:
+  - DOMContentLoaded → start-btn click → Tone.start() → init()
+  - init: GraphicsEngine → AudioEngine → TrackingEngine → setupEventListeners → loop
+  - Animation loop: deltaTime capped 100ms, GraphicsEngine.update + AudioEngine.update
+  - Gesture wiring (βλ. ΦΑΣΗ 4 για λεπτομέρειες)
+  - HUD update κάθε 100ms, debug overlay κάθε ~500ms
+  - Keyboard: Space=play/stop, Q/W/E=quality, H=HUD, F=FPS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 1 — PASSED
+       Μαύρη οθόνη + Start overlay + Loading bar + FPS counter + Console OK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3: ΦΑΣΗ 2 — HAND TRACKING  ✅ ΟΛΟΚΛΗΡΩΘΗΚΕ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΑΡΧΙΤΕΚΤΟΝΙΚΗ (πραγματική):
+  MediaPipe Tasks Vision @0.10.34 φορτώνεται ΤΟΠΙΚΑ ως CJS bundle
+  (src/workers/vision_bundle.js) με prepended shim.
+  Ο Worker χρησιμοποιεί importScripts('./vision_bundle.js') — classic, ΟΧΙ ES module.
+  ΔΕΝ φορτώνει από CDN (λόγω CORS + module Worker θεμάτων).
+
+mediapipe.worker.js:
+  - importScripts('./vision_bundle.js')
+  - numHands: 2
+  - minHandDetectionConfidence: 0.35
+  - minHandPresenceConfidence: 0.35
+  - minTrackingConfidence: 0.30
+  - delegate: GPU (fallback CPU αν αποτύχει)
+  - Model: hand_landmarker float16 Lite (CDN google storage)
+  - WASM: jsdelivr CDN @0.10.34
+  - Handedness swap: MediaPipe 'Right' → viewer's LEFT
+  - bitmap.close() αμέσως μετά detection
+  - processingFps: rolling 1-second window
+
+TrackingEngine.js:
+  - Webcam: 320×240 (ΟΧΙ 640×480 — performance)
+  - OffscreenCanvas: 320×240
+  - Backpressure: workerBusy flag
+  - Camera preview: draws video + skeleton + bars + quads σε #cam-canvas 160×120
+  - Smoothing: 0.45 για palm, 0.35 για fingers/frame/cross
+  - Events emitted:
+    · gesture:pinch { hand, active }      — edge-detect, hysteresis
+    · gesture:fist { hand }               — edge-detect, 1200ms cooldown
+    · gesture:fingers { hand, distances }  — κάθε frame per hand
+    · gesture:crossFingers { distances }   — κάθε frame αν 2 χέρια
+    · gesture:frame { active, height, width, lt, li, rt, ri }
+    · hands:update { left, right }
+  - Repulsion: strength 2.5 (1 χέρι), 3.0 (2 χέρια)
+
+GestureDetector.js (pure functions):
+  - isPinching(landmarks, wasPinching?) — hysteresis 0.06 engage / 0.10 release
+  - isFist(landmarks) — fingertips < PIP joints, wrist edge guard 0.08
+  - getPalmCenter(landmarks) — avg [0,5,9,13,17]
+  - applySmoothing(current, previous, factor=0.45) — EMA
+  - getFrameGesture(leftLm, rightLm) — quad thumb+index tips both hands
+  - getFingerDistances(landmarks) — thumb(4) ↔ index(8)=bass, middle(12)=drums, ring(16)=melody
+  - getCrossHandDistances(leftLm, rightLm) — L↔R index=bass, middle=drums, ring=melody
+
+CoordinateMapper.js:
+  - mediapipeToThreeJS(nx, ny, nz, depthScale=0.5)
+    X: -(nx * 8.8 - 4.4) [mirrored], Y: -(ny * 6.6 - 3.3), Z: nz * depthScale
+  - mediapipeToScreenPercent(nx, ny)
+
+ΣΗΜΕΙΩΣΗ: Swipe detection ΑΦΑΙΡΕΘΗΚΕ — αντικαταστάθηκε από fist gesture
+για stem cycling (αλλά τώρα ΟΧΙ solo mode, βλ. Φάση 4).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 2 — PASSED
+       Tracking ~10fps MediaPipe (numHands=2), 60fps render, GPU delegate OK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4: ΦΑΣΗ 3 — GRAPHICS ENGINE  ✅ ΟΛΟΚΛΗΡΩΘΗΚΕ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GraphicsEngine.js (plain object, NOT class):
+  - Renderer: WebGLRenderer, antialias αν quality != low, pixelRatio 1 (low)
+  - Scene: background 0x000008, FogExp2 0.018
+  - Camera: PerspectiveCamera FOV 75, Z=5
+  - Lights: AmbientLight 0x111111 + PointLight 0xffffff (shadow αν quality != low)
+  - ParticleSystem: 3000 (low) / 8000 (med) / 15000 (high), spring-back + repulsion
+  - HolographicHand × 2: 21 spheres + 23 connection lines per hand, pulse animation
+  - Cross-hand quads (3 stems × 4 edges = 12 lines):
+    · Bass (orange 0xff8800): L_thumb(4) → L_index(8) → R_index(8) → R_thumb(4)
+    · Drums (red 0xff4444): L_thumb(4) → L_middle(12) → R_middle(12) → R_thumb(4)
+    · Melody (yellow 0xffff00): L_thumb(4) → L_ring(16) → R_ring(16) → R_thumb(4)
+    · Additive blending, glow duplicates, 12 corner dots (4 per quad)
+  - setQuality(level): particle rebuild, renderer settings, shadow toggle
+  - destroy(): full cleanup
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 3 — PASSED
+       Holographic hands + particles + cross-hand quads visible
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5: ΦΑΣΗ 4 — AUDIO ENGINE  ✅ ΟΛΟΚΛΗΡΩΘΗΚΕ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️  ΜΕΓΑΛΗ ΑΛΛΑΓΗ ΑΠΟ ΤΟ ΑΡΧΙΚΟ ΣΧΕΔΙΟ:
+  Αρχικό σχέδιο: hand Y → volume, pinch+drag → filter, swipe → loop change
+  Τελική υλοποίηση: PER-STEM finger-distance control, ALL stems simultaneous
+
+AudioEngine.js (plain object):
+  Signal chain PER STEM (×3: drums, bass, melody):
+    Tone.Player (loop:true)
+    → Tone.Volume (0 dB)
+    → Tone.Filter (lowpass, 15000 Hz)
+    → Tone.Reverb (decay: 2.5s, wet: 0)
+    → masterVol (Tone.Volume -6 dB)
+    → Destination
+
+  Methods:
+    init()                        — δημιουργεί signal chains, Tone.loaded()
+    play()                        — Tone.start() + Transport + all Players
+    stop()                        — stops all
+    setVolume(stem, value 0-1)    — deadband 0.015, rampTo 80ms
+    setStemFilter(stem, freq)     — deadband 30Hz, rampTo 100ms, range 200-15000
+    setStemReverb(stem, wet 0-1)  — deadband 0.02, rampTo 100ms
+    triggerLoopChange()           — drums dip -20dB for 300ms, emit audio:loopChange
+    update(dt)                    — κενό (gesture events οδηγούν audio)
+    destroy()                     — dispose all Tone nodes
+
+GESTURE → AUDIO WIRING (στο main.js):
+
+  1. gesture:fingers (LEFT hand):
+     thumb-to-finger distance → PER-STEM VOLUME
+     · thumb(4) ↔ index(8)  → bass volume
+     · thumb(4) ↔ middle(12) → drums volume
+     · thumb(4) ↔ ring(16)  → melody volume
+     Normalization: norm = (dist - 0.02) / 0.18, clamped 0-1
+     Δηλαδή: κλειστά δάχτυλα = σιγά, ανοιχτά = δυνατά
+
+  2. gesture:fingers (RIGHT hand):
+     thumb-to-finger distance → PER-STEM FILTER
+     · thumb(4) ↔ index(8)  → bass filter freq
+     · thumb(4) ↔ middle(12) → drums filter freq
+     · thumb(4) ↔ ring(16)  → melody filter freq
+     Logarithmic: freq = 200 * (15000/200)^norm Hz (200-15000)
+
+  3. gesture:crossFingers:
+     Left↔Right matching fingers distance → PER-STEM REVERB
+     · L_index(8) ↔ R_index(8)   → bass reverb wet
+     · L_middle(12) ↔ R_middle(12) → drums reverb wet
+     · L_ring(16) ↔ R_ring(16)   → melody reverb wet
+     Normalization: norm = (dist - 0.05) / 0.45, clamped 0-1
+     Δηλαδή: χέρια κοντά = dry, χέρια μακριά = wet reverb
+
+  Debug overlay: δείχνει per-stem V% / F% / R% κάθε ~500ms
+
+ΣΗΜΕΙΩΣΕΙΣ:
+  - ΔΕΝ υπάρχει solo mode — όλα τα stems παίζουν ταυτόχρονα
+  - ΔΕΝ υπάρχει swipe → loop change (αφαιρέθηκε)
+  - ΔΕΝ υπάρχει pinch+drag → filter (αντικαταστάθηκε από finger distances)
+  - Volumes ξεκινούν 0dB (ίσα, όχι drums στα 0 + bass/melody στα -6)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 4 — PASSED
+       Space → μουσική, χέρια ελέγχουν per-stem volume/filter/reverb
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6: ΦΑΣΗ 5 — SOLAR SYSTEM + COLOR PALETTES  ✅ ΟΛΟΚΛΗΡΩΘΗΚΕ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΣΤΟΧΟΣ: Visual impact — πλανήτες περιφέρονται, κάμερα fly-to,
+         dynamic lighting & particle colors.
+
+TRIGGER MECHANISM:
+  Fist gesture (1200ms cooldown) → gesture:fist → GraphicsEngine.advanceScene()
+  + AudioEngine.triggerLoopChange()
+  Wired in main.js setupEventListeners()
+
+────────────────────────────────────────────────────────────────────
+5.1 — SolarSystem class (μέσα στο GraphicsEngine.js)
+────────────────────────────────────────────────────────────────────
+
+Πρόσθεσε class SolarSystem μέσα στο GraphicsEngine.js.
+Initialize από GraphicsEngine.init(), update από GraphicsEngine.update().
+Lerp-based camera animation (ΟΧΙ GSAP).
+
+PLANET_DATA = [
+  { name:'earth',   radius:0.4, distance:4,   orbitSpeed:0.005,  texture:'earth.jpg'   },
+  { name:'mars',    radius:0.3, distance:6,   orbitSpeed:0.003,  texture:'mars.jpg'    },
+  { name:'jupiter', radius:0.7, distance:9,   orbitSpeed:0.001,  texture:'jupiter.jpg' },
+  { name:'saturn',  radius:0.6, distance:12,  orbitSpeed:0.0007, texture:null          }
+]
+
+CAMERA_TARGETS: ['sun', 'earth', 'mars', 'jupiter', 'saturn']
+
+ΣΗΜΑΝΤΙΚΟ: Camera fly-to animation — ΛΥΘΗΚΕ
+  Hands, quads, particles παραμένουν μπροστά (handLayer πάνω στη camera Z=-5).
+  Solar system ρεντάρεται πίσω στο scene.
+
+Sun:
+  - SphereGeometry(1.5, 32, 32), MeshBasicMaterial
+  - Texture αν quality != low, αλλιώς color 0xffaa44
+  - Glow sphere (radius 1.8, opacity 0.15, AdditiveBlending)
+  - Slow Y-rotation 0.001 rad/frame
+
+Planets:
+  - SphereGeometry, MeshStandardMaterial, textures αν quality != low
+  - Fallback colors: earth=0x2255aa, mars=0xcc3300, jupiter=0xddaa55, saturn=0xddcc88
+  - Staggered orbit angles
+
+Camera animation:
+  - cameraLerpT 0→1 over ~2 seconds
+  - easeInOut: t < 0.5 ? 2*t*t : -1+(4-2*t)*t
+  - lookAt target planet position
+
+────────────────────────────────────────────────────────────────────
+5.2 — Dynamic Color Palettes
+────────────────────────────────────────────────────────────────────
+
+Πρόσθεσε class ColorSystem μέσα στο GraphicsEngine.js.
+Transitions: ambient light, point light, particle colors, fog.
+
+PALETTES = {
+  sun:     { ambient: 0x221100, pointLight: 0xffaa44, particle: 0xff6600, fog: 0x050200 },
+  earth:   { ambient: 0x001122, pointLight: 0x4488ff, particle: 0x00ccff, fog: 0x000508 },
+  mars:    { ambient: 0x220800, pointLight: 0xff4400, particle: 0xff2200, fog: 0x050100 },
+  jupiter: { ambient: 0x110022, pointLight: 0xaa44ff, particle: 0x8800ff, fog: 0x030005 },
+  saturn:  { ambient: 0x111100, pointLight: 0xffdd00, particle: 0xffaa00, fog: 0x050400 }
+}
+
+ΣΗΜΑΝΤΙΚΟ: Τα cross-hand quad colors (orange/red/yellow) πρέπει να
+παραμένουν σταθερά ανεξάρτητα από το palette ώστε ο χρήστης
+να αναγνωρίζει πάντα ποιο stem ελέγχει.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 5 — PASSED
+       Πλανήτες ορατοί, fist → camera fly-to,
+       colors αλλάζουν ομαλά, hands παραμένουν functional.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7: ΦΑΣΗ 6 — POLISH & PERFORMANCE  ✅ ΟΛΟΚΛΗΡΩΘΗΚΕ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΤΡΕΧΟΥΣΑ ΚΑΤΑΣΤΑΣΗ: ΟΛΛΑ ΥΛΟΠΟΙΗΘΗΚΑΝ.
+
+────────────────────────────────────────────────────────────────────
+6.1 — Auto Quality Manager
+────────────────────────────────────────────────────────────────────
+
+Πρόσθεσε στο GraphicsEngine:
+  - fpsHistory array, check κάθε 5 seconds
+  - avg FPS < 25 → step down (high→med→low)
+  - avg FPS > 55 → step up
+  - Μόνο αν state.quality === 'auto'
+
+Quality specs:
+  LOW:   3000 particles, no shadows, pixelRatio 1, physics skip frames
+  MED:   8000 particles, shadows 512px, pixelRatio min(dpr, 1.5)
+  HIGH: 15000 particles, shadows 1024px, full dpr
+
+────────────────────────────────────────────────────────────────────
+6.2 — HUD Improvements
+────────────────────────────────────────────────────────────────────
+
+ΗΔΗ ΥΠΑΡΧΕΙ:
+  - hud-bpm, hud-stems (dots), hud-quality (letter), hud-hands (L/R dots)
+  - hud-planet flash on audio:loopChange
+  - FPS counter (render + MediaPipe)
+  - Debug overlay: per-stem V/F/R%, hand detection, play state
+  - Keyboard: Space, Q/W/E, H, F
+
+ΛΕΙΠΕΙ:
+  - Loading screen animation improvements
+  - Stem dots: color coding ✅
+    drums=#ff4444 (red), bass=#ff8800 (orange), melody=#ffff00 (yellow)
+    — consistent with cross-hand quad colors
+  - Touch/mobile controls (αν χρειαστεί)
+
+────────────────────────────────────────────────────────────────────
+6.3 — Performance Tuning
+────────────────────────────────────────────────────────────────────
+
+  - MediaPipe: ~10fps at numHands=2 — αποδεκτό
+  - Three.js: 60fps render — OK
+  - Tone.js: setVolume/setStemFilter/setStemReverb deadband OK
+  - Potential: reduce webcam to 240×180 αν MediaPipe FPS < 8
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 6 — PASSED
+       Auto quality λειτουργεί (A key), HUD color-coded.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8: ΦΑΣΗ 7 — PROJECTION MAPPING  [OPTIONAL / ΑΡΓΟΤΕΡΑ]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Μόνο για live performance/installation με projector.
+Keystone correction via post-process shader pass.
+Toggle: Ctrl+Shift+K
+4 draggable HTML corners → save to localStorage.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9: ΓΝΩΣΤΑ ΠΡΟΒΛΗΜΑΤΑ & ΛΥΣΕΙΣ (ΕΝΗΜΕΡΩΜΕΝΑ)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΛΥΘΗΚΕ: "MediaPipe CDN Worker — CORS / module errors"
+  ΛΥΣΗ: Τοπικό CJS bundle (vision_bundle.js) με prepended shim.
+  Ο Worker χρησιμοποιεί importScripts('./vision_bundle.js') — classic, ΟΧΙ module.
+  Χρειάστηκαν 6 iterations μέχρι να λυθεί σωστά.
+
+ΛΥΘΗΚΕ: "Audio δεν αντιδρά / volumes άνισα"
+  ΛΥΣΗ: Διορθώθηκε Y normalization, rampTo spam, filter range.
+  Volumes ξεκινούν 0dB (ΟΧΙ drums 0 + bass/melody -6).
+
+ΛΥΘΗΚΕ: "Cross-hand lines αόρατες στο camera preview"
+  ΛΥΣΗ: Μετακινήθηκαν στο 3D canvas ως Three.js Lines + glow + dots.
+  Τώρα είναι full quads (4 πλευρές) αντί single line.
+
+ΛΥΘΗΚΕ: "Solo mode confusion"
+  ΛΥΣΗ: ΑΦΑΙΡΕΘΗΚΕ solo mode εντελώς. Όλα τα stems ταυτόχρονα.
+
+ΑΝΟΙΧΤΟ: "MediaPipe ~10fps με 2 χέρια"
+  Αποδεκτό performance αλλά αν χρειαστεί:
+  - Μείωσε webcam resolution (ήδη 320×240)
+  - numHands: 1 αν χρειάζεται μόνο ένα χέρι (δεν ισχύει στο τρέχον design)
+
+ΑΝΟΙΧΤΟ: "Tone.js browser autoplay"
+  ΛΥΣΗ: Start overlay button — ο χρήστης πρέπει να κάνει click πρώτα.
+
+ΑΝΟΙΧΤΟ: "importmap compatibility"
+  Απαιτεί: Chrome 89+, Firefox 108+, Safari 16.4+
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10: TIMELINE & CHECKPOINTS ΣΥΝΟΨΗ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ΦΑΣΗ 0: Setup & Validation          ✅ ΟΛΟΚΛΗΡΩΘΗΚΕ
+  ΦΑΣΗ 1: Foundation Skeleton          ✅ CHECKPOINT 1 PASSED
+  ΦΑΣΗ 2: Hand Tracking (Worker)       ✅ CHECKPOINT 2 PASSED (60fps, GPU delegate)
+  ΦΑΣΗ 3: Graphics + Particles         ✅ CHECKPOINT 3 PASSED (hands + quads)
+  ΦΑΣΗ 4: Audio (per-stem control)     ✅ CHECKPOINT 4 PASSED (vol/filter/reverb)
+  ΦΑΣΗ 5: Solar System + Palettes      ✅ CHECKPOINT 5 PASSED (fist trigger + handLayer)
+  ΦΑΣΗ 6: Polish & Auto Quality        ✅ CHECKPOINT 6 PASSED (auto quality + color stems)
+  ΦΑΣΗ 7: Projection Mapping         [OPT] 🔲
+
+ΣΕΙΡΑ ΑΡΧΕΙΩΝ (υφιστάμενα):
+  1. index.html
+  2. styles.css
+  3. src/core/EventBus.js
+  4. src/core/StateManager.js
+  5. src/utils/GestureDetector.js
+  6. src/utils/CoordinateMapper.js
+  7. src/workers/vision_bundle.js    ← ΤΟΠΙΚΟ CJS bundle
+  8. src/workers/mediapipe.worker.js
+  9. src/engines/TrackingEngine.js
+  10. src/engines/GraphicsEngine.js
+  11. src/engines/AudioEngine.js
+  12. main.js
+
+
+================================================================================
+  ΤΕΛΟΣ ΑΡΧΕΙΟΥ — dj-visualizer roadmap.txt
+  Ενημέρωσε αυτό το αρχείο καθώς το project εξελίσσεται.
+================================================================================
+================================================================================
+  INTERACTIVE DJ & 3D VISUALIZER — HAND TRACKING
+  ΠΛΗΡΕΣ ROADMAP + AI PROMPTS (GitHub Copilot / Claude)
+
+  ΑΡΧΙΤΕΚΤΟΝΙΚΗ: MediaPipe Tasks Vision Lite + Web Worker + Vanilla JS
+  Τελευταία ενημέρωση: Απρίλιος 2026
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 0: ΠΡΙΝ ΑΡΧΙΣΕΙΣ — CHECKLIST VALIDATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΒΗΜΑ 0.1 — Έλεγχος browser performance (MediaPipe)
+  → Άνοιξε: https://viz.mediapipe.dev/demo/hand_tracking
+  → Κοίτα το FPS counter (πάνω δεξιά)
+  → FPS > 40:    είσαι εντάξει
+  → FPS 25–40:  ΟΚ, χρησιμοποιείς ήδη Lite model
+  → FPS < 25:    βεβαιώσου ότι χρησιμοποιείς Chrome + hardware acceleration
+    (Settings → System → Use hardware acceleration when available)
+
+ΒΗΜΑ 0.2 — Έλεγχος WebGL performance (Three.js)
+  → Άνοιξε: https://threejs.org/examples/#webgl_points_sprites
+  → Πρέπει να τρέχει ομαλά χωρίς lag
+  → Αν κολλάει: ενεργοποίησε hardware acceleration (βλ. 0.1)
+
+ΒΗΜΑ 0.3 — VS Code extensions (εγκατάσταση πριν γράψεις κώδικα)
+  → GitHub Copilot (επίσημο extension)
+  → ES6 Snippets
+  → Live Server  ← ΚΡΙΣΙΜΟ: Web Workers δεν τρέχουν από file:// URL
+
+  ΣΗΜΑΝΤΙΚΟ: Το project ΠΑΝΤΑ πρέπει να τρέχει μέσω Live Server (http://localhost:XXXX)
+  και ΟΧΙ με double-click στο index.html. Web Workers και camera access
+  απαιτούν HTTP context.
+
+ΒΗΜΑ 0.4 — Κατέβασε τα Audio Stems (πριν γράψεις κώδικα)
+  → Πήγαινε στο: https://www.looperman.com
+  → Αναζήτηση: "drum loop 120 bpm"   → κατέβασε 1 αρχείο .mp3
+  → Αναζήτηση: "bass loop 120 bpm"   → κατέβασε 1 αρχείο .mp3
+  → Αναζήτηση: "melody loop 120 bpm" → κατέβασε 1 αρχείο .mp3
+  → Όλα πρέπει να είναι ακριβώς 120 BPM (έλεγξε filename/description)
+  → Μετονόμασε σε: drums.mp3, bass.mp3, melody.mp3
+  → Μέγεθος: κάτω από 2MB το καθένα
+
+ΒΗΜΑ 0.5 — Κατέβασε Planet Textures
+  → https://www.solarsystemscope.com/textures/
+  → Κατέβασε σε 1K ανάλυση (ΟΧΙ 8K)
+  → Μετονόμασε σε: sun.jpg, earth.jpg, mars.jpg, jupiter.jpg
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1: FILE STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Δημιούργησε αυτή τη δομή χειροκίνητα πριν στείλεις οποιοδήποτε prompt:
+
+  dj-visualizer/
+  ├── index.html
+  ├── styles.css
+  ├── main.js
+  ├── assets/
+  │   ├── audio/
+  │   │   ├── drums.mp3
+  │   │   ├── bass.mp3
+  │   │   └── melody.mp3
+  │   └── textures/
+  │       ├── sun.jpg
+  │       ├── earth.jpg
+  │       ├── mars.jpg
+  │       └── jupiter.jpg
+  └── src/
+      ├── core/
+      │   ├── StateManager.js
+      │   └── EventBus.js
+      ├── engines/
+      │   ├── GraphicsEngine.js
+      │   ├── AudioEngine.js
+      │   └── TrackingEngine.js
+      ├── workers/
+      │   └── mediapipe.worker.js     ← Web Worker για MediaPipe
+      └── utils/
+          ├── GestureDetector.js
+          └── CoordinateMapper.js
+
+ΣΗΜΕΙΩΣΗ: Δεν χρειάζεσαι npm / Node.js. Το project είναι pure Vanilla JS
+με CDN dependencies. Αρκεί το Live Server extension.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2: ΦΑΣΗ 1 — FOUNDATION SKELETON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΣΤΟΧΟΣ: Κενός καμβάς που φορτώνει χωρίς errors, με όλα τα stubs έτοιμα.
+
+────────────────────────────────────────────────────────────────────
+PROMPT 1.1 — index.html
+────────────────────────────────────────────────────────────────────
+
+Create a minimal index.html for a Vanilla JS web application called "DJ Visualizer".
+Requirements:
+- Use ES Modules (type="module") for main.js
+- Import Three.js r158 from CDN (jsdelivr):
+    https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js
+    Use an importmap so modules can import 'three' by name
+- Import Tone.js 14.x from CDN as a classic script (before main.js):
+    https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js
+- Do NOT import MediaPipe in HTML — it is loaded inside the Web Worker only
+- Add <canvas id="main-canvas"> that fills 100% of the viewport
+- Add <video id="webcam" autoplay playsinline muted style="display:none">
+- Add <div id="ui-overlay"> for HUD elements (position: absolute, full screen, pointer-events: none)
+- Add <div id="fps-counter"> top-left corner, white monospace text, visible during dev
+- Add <div id="loading-screen"> full-screen overlay (will be populated in Phase 6)
+- No external CSS frameworks. Link to styles.css.
+- Page background: #000000. No margin, no overflow.
+
+────────────────────────────────────────────────────────────────────
+PROMPT 1.2 — styles.css
+────────────────────────────────────────────────────────────────────
+
+Create styles.css for the DJ Visualizer.
+Requirements:
+- Reset: *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+- body: background #000000; overflow hidden; font-family monospace
+- #main-canvas: display block; width 100vw; height 100vh; position fixed; top 0; left 0
+- #webcam: display none (hidden — only used as source for OffscreenCanvas)
+- #ui-overlay: position fixed; top 0; left 0; width 100%; height 100%;
+               pointer-events none; z-index 10
+- #fps-counter: position fixed; top 10px; left 10px; color #00ff00;
+                font-size 12px; z-index 20; pointer-events none
+- #loading-screen: position fixed; top 0; left 0; width 100%; height 100%;
+                   background #000010; display flex; align-items center;
+                   justify-content center; z-index 100;
+                   transition opacity 0.5s ease
+- .loading-content: text-align center; color white
+- .loading-bar: width 300px; height 4px; background #111; margin 20px auto; border-radius 2px
+- #loading-progress: height 100%; width 0%; background #00ffff;
+                     border-radius 2px; transition width 0.3s ease
+
+────────────────────────────────────────────────────────────────────
+PROMPT 1.3 — StateManager.js
+────────────────────────────────────────────────────────────────────
+
+Create src/core/StateManager.js as a singleton ES Module.
+This is the central state object for the entire application.
+
+The state must contain these exact keys:
+  - bpm: 120
+  - isPlaying: false
+  - quality: "medium"              // "low" | "medium" | "high" | "auto"
+  - hands: {
+      left:  { detected: false, x: 0, y: 0, z: 0, pinching: false },
+      right: { detected: false, x: 0, y: 0, z: 0, pinching: false }
+    }
+  - audio: {
+      drumsVolume:  0.8,
+      bassVolume:   0.5,
+      melodyVolume: 0.5,
+      filterCutoff: 8000           // Hz
+    }
+  - camera: {
+      currentTarget: "sun",        // "sun" | "earth" | "mars" | "jupiter" | "saturn"
+      isAnimating: false
+    }
+  - particles: {
+      repulsionX:        0,
+      repulsionY:        0,
+      repulsionStrength: 0
+    }
+
+Export:
+  - `state` object (not a class — plain object)
+  - `updateState(path, value)` — dot-notation path setter
+      e.g. updateState("hands.left.x", 0.5)
+      Must support nested paths up to 3 levels deep
+  - `getState(path)` — dot-notation getter
+      e.g. getState("hands.left.detected") → false
+
+No external dependencies. No events emitted here (EventBus handles that).
+
+────────────────────────────────────────────────────────────────────
+PROMPT 1.4 — EventBus.js
+────────────────────────────────────────────────────────────────────
+
+Create src/core/EventBus.js as a singleton ES Module.
+Implement a minimal publish/subscribe event system.
+
+Export:
+  - on(event, callback)      — subscribe
+  - off(event, callback)     — unsubscribe
+  - emit(event, data)        — publish (synchronous)
+
+No external dependencies.
+
+Document these events as comments (they are used throughout the project):
+  'hands:update'        → payload: { left, right }
+  'gesture:pinch'       → payload: { hand: 'left'|'right', active: boolean }
+  'gesture:swipe'       → payload: { direction: 'left'|'right' }
+  'audio:play'          → no payload
+  'audio:stop'          → no payload
+  'audio:volumeChange'  → payload: { stem: string, value: number }
+  'audio:loopChange'    → no payload  ← triggered by swipe, drives camera
+  'graphics:quality'    → payload: { level: string }
+
+────────────────────────────────────────────────────────────────────
+PROMPT 1.5 — main.js
+────────────────────────────────────────────────────────────────────
+
+Create main.js as the application entry point (ES Module).
+
+Imports:
+  - StateManager, EventBus from src/core/
+  - GraphicsEngine, AudioEngine, TrackingEngine from src/engines/
+
+  IMPORTANT: Do NOT use relative paths with ./ prefix when using importmap.
+  Import Three.js as: import * as THREE from 'three'
+
+Define async init():
+  1. Log "Initializing DJ Visualizer..."
+  2. updateLoadingProgress(0, "Loading graphics...")
+  3. await GraphicsEngine.init(document.getElementById('main-canvas'))
+  4. updateLoadingProgress(33, "Loading audio...")
+  5. await AudioEngine.init()
+  6. updateLoadingProgress(66, "Starting camera...")
+  7. await TrackingEngine.init(document.getElementById('webcam'))
+  8. updateLoadingProgress(100, "Ready!")
+  9. After 600ms delay: hide loading screen (set opacity 0, then display none)
+  10. Start animation loop (requestAnimationFrame)
+  11. Log "All systems ready."
+
+Animation loop:
+  - Calculate deltaTime (seconds since last frame)
+  - Call GraphicsEngine.update(deltaTime)
+  - Call AudioEngine.update(deltaTime)
+  - Update FPS counter every 500ms
+
+Helper:
+  updateLoadingProgress(percent, message):
+    - Set #loading-progress width to percent + "%"
+    - Set #loading-status textContent to message
+
+Error handling:
+  - Wrap init() in try/catch
+  - On error: show error message in #loading-screen with a "Retry" button
+  - Log full error to console
+
+Keyboard shortcuts (for development — clearly marked with // DEV comment):
+  - Spacebar: toggle AudioEngine.play() / stop()
+  - Q: GraphicsEngine.setQuality('low')
+  - W: GraphicsEngine.setQuality('medium')
+  - E: GraphicsEngine.setQuality('high')
+  - H: toggle #ui-overlay visibility
+
+DO NOT implement engines yet — use empty stub classes that log
+"[EngineName] initialized" from init() and are no-ops on update().
+Stubs must export: init(), update(), destroy()
+AudioEngine stub also exports: play(), stop()
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 1
+       Άνοιξε index.html με Live Server (not file://).
+       Πρέπει να βλέπεις:
+       - Μαύρη οθόνη
+       - FPS counter (top-left, green)
+       - Loading screen που εξαφανίζεται
+       - Console: "Initializing...", "All systems ready."
+       ΜΗΝ προχωρήσεις αν υπάρχουν errors στο console.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3: ΦΑΣΗ 2 — HAND TRACKING (Web Worker + MediaPipe Lite)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΣΤΟΧΟΣ: MediaPipe τρέχει σε ξεχωριστό thread. Το main thread δεν μπλοκάρει ποτέ.
+
+ΑΡΧΙΤΕΚΤΟΝΙΚΗ ΣΗΜΕΙΩΣΗ:
+  mediapipe.worker.js τρέχει σε Web Worker (ξεχωριστό thread).
+  Κάθε frame: ο main thread παίρνει ImageBitmap από το video,
+  το στέλνει στον Worker με postMessage (zero-copy transfer).
+  Ο Worker επιστρέφει landmarks → main thread ενημερώνει State + EventBus.
+
+  ΚΡΙΣΙΜΟ ΤΕΧΝΙΚΟ ΘΕΜΑ: Το MediaPipe Tasks Vision API (νέα έκδοση)
+  υποστηρίζει importScripts() μέσα σε Workers.
+  Χρησιμοποίησε το bundle: vision_bundle.js (ΟΧΙ ES module version).
+  CDN: https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.js
+
+────────────────────────────────────────────────────────────────────
+PROMPT 2.1 — mediapipe.worker.js
+────────────────────────────────────────────────────────────────────
+
+Create src/workers/mediapipe.worker.js — a Web Worker for hand tracking.
+
+Use importScripts() to load MediaPipe inside the Worker:
+  importScripts('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.js');
+
+After load, access API via: const { HandLandmarker, FilesetResolver } = globalThis;
+
+Initialization (on message type 'INIT'):
+  1. Create FilesetResolver for vision tasks (use CDN for WASM assets)
+  2. Create HandLandmarker with:
+     - numHands: 2
+     - minHandDetectionConfidence: 0.5
+     - minHandPresenceConfidence: 0.5
+     - minTrackingConfidence: 0.5
+     - delegate: 'GPU' (with silent CPU fallback if GPU fails)
+     - model: use Lite model from CDN
+       https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+  3. Post { type: 'READY' } when complete
+  4. Post { type: 'ERROR', message } on any failure
+
+Processing (on message type 'PROCESS', bitmap: ImageBitmap):
+  1. Run handLandmarker.detectForVideo(bitmap, Date.now())
+  2. bitmap.close() to free GPU memory immediately after detection
+  3. Parse results into normalized left/right hand data
+  4. Track processing time for FPS calculation
+  5. Post {
+       type: 'LANDMARKS',
+       data: {
+         left:  { detected: bool, landmarks: Array<{x,y,z}> } | null,
+         right: { detected: bool, landmarks: Array<{x,y,z}> } | null,
+         processingFps: number
+       }
+     }
+
+IMPORTANT:
+  - handedness in MediaPipe results is SWAPPED relative to viewer
+    (MediaPipe 'Right' = viewer's Left). Swap when parsing.
+  - Never post back a frame until the previous one is fully processed
+    (the main thread enforces this with a 'busy' flag).
+  - If landmark array is empty for a hand, post null for that hand.
+
+────────────────────────────────────────────────────────────────────
+PROMPT 2.2 — TrackingEngine.js
+────────────────────────────────────────────────────────────────────
+
+Create src/engines/TrackingEngine.js as an ES Module.
+Import { updateState } from '../core/StateManager.js'
+Import { emit } from '../core/EventBus.js'
+Import { applySmoothing, isPinching, detectSwipe, getPalmCenter }
+  from '../utils/GestureDetector.js'
+Import { mediapipeToThreeJS } from '../utils/CoordinateMapper.js'
+
+async init(videoElement):
+  1. Request webcam:
+       navigator.mediaDevices.getUserMedia({ video: { width:640, height:480,
+         facingMode:'user' } })
+     On permission denied: log warning "Camera access denied — tracking disabled",
+     set a flag this.cameraAvailable = false, return without crashing.
+  2. Assign stream to videoElement.srcObject, await videoElement.play()
+  3. Create OffscreenCanvas(640, 480) — used to extract ImageBitmap each frame
+  4. Create Worker: new Worker('./src/workers/mediapipe.worker.js')
+  5. Set up worker.onmessage handler (see below)
+  6. Send { type: 'INIT' } to Worker
+  7. Await 'READY' response (use a Promise that resolves on type:'READY',
+     rejects on type:'ERROR' or after 10 second timeout)
+  8. Set this.workerBusy = false
+  9. Start frame loop via requestAnimationFrame
+
+Frame loop (requestAnimationFrame, only runs if cameraAvailable):
+  1. If this.workerBusy === true: skip this frame (backpressure)
+  2. Draw videoElement to offscreenCanvas context
+  3. const bitmap = await createImageBitmap(offscreenCanvas)
+  4. this.workerBusy = true
+  5. worker.postMessage({ type:'PROCESS', bitmap }, [bitmap])  // transfer ownership
+
+On worker message type 'LANDMARKS':
+  1. this.workerBusy = false
+  2. For each hand (left, right):
+     a. If null: updateState("hands.[side].detected", false); continue
+     b. Get palm center via getPalmCenter(landmarks)
+     c. Apply applySmoothing() to palmCenter x, y, z
+        (keep previous values in this.prevPalm[side])
+     d. Convert to Three.js coords: mediapipeToThreeJS(cx, cy, cz)
+     e. updateState("hands.[side]", { detected:true, x, y, z, pinching:... })
+     f. Update particles repulsion from active hand(s)
+     g. Detect pinch, emit 'gesture:pinch' only if state CHANGED
+     h. Update swipe history buffer (circular, 15 entries)
+     i. Detect swipe, emit 'gesture:swipe' if detected
+  3. emit('hands:update', { left: state.hands.left, right: state.hands.right })
+
+Repulsion update logic:
+  - If both hands detected: use average palm position
+  - If one hand detected: use that hand's palm position
+  - If no hands: set repulsionStrength to 0 (particles return home)
+  - repulsionStrength: 2.5 when hand detected, 0 when not
+
+Export: init(videoElement), destroy()
+destroy(): terminate worker, stop camera stream tracks
+
+────────────────────────────────────────────────────────────────────
+PROMPT 2.3 — GestureDetector.js
+────────────────────────────────────────────────────────────────────
+
+Create src/utils/GestureDetector.js as an ES Module.
+Pure utility functions — no imports, no state.
+
+Implement:
+
+1. isPinching(landmarks):
+   - landmarks: Array<{x, y, z}> (21 points, normalized 0-1)
+   - Compute Euclidean distance between landmark[4] (thumb tip)
+     and landmark[8] (index tip) in 2D (ignore Z for stability)
+   - Returns true if distance < 0.06
+   - Returns false if landmarks is null or length < 9
+
+2. detectSwipe(historyBuffer, cooldownRef):
+   - historyBuffer: Array of the last N palm X positions (landmark[0].x),
+     newest at index 0
+   - cooldownRef: object { lastSwipeTime: number } (passed by reference)
+   - Minimum history length to evaluate: 10 entries
+   - Swipe detected if abs(history[0] - history[history.length-1]) > 0.28
+     within the buffer
+   - Cooldown: 800ms between swipes (compare Date.now() to cooldownRef.lastSwipeTime)
+   - Returns 'left', 'right', or null
+   - Direction: if final X > initial X → 'right' (remember: X is mirrored)
+   - On detection: update cooldownRef.lastSwipeTime = Date.now()
+
+3. getPalmCenter(landmarks):
+   - Returns the average {x, y, z} of landmarks at indices [0, 5, 9, 13, 17]
+   - Returns {x:0, y:0, z:0} if landmarks is null
+
+4. applySmoothing(current, previous, factor = 0.15):
+   - Returns: previous + (current - previous) * factor
+   - Works on a single number
+   - factor range: 0.08 (very smooth) to 0.3 (responsive)
+   - Use 0.12 as default for palm position (good balance)
+
+Export all four functions as named exports.
+
+────────────────────────────────────────────────────────────────────
+PROMPT 2.4 — CoordinateMapper.js
+────────────────────────────────────────────────────────────────────
+
+Create src/utils/CoordinateMapper.js as an ES Module.
+Converts MediaPipe normalized coords (0–1) to Three.js world space.
+
+The Three.js scene uses:
+  - PerspectiveCamera, FOV 75, position Z=5
+  - Visible world bounds: X ≈ -4.4 to 4.4, Y ≈ -3.3 to 3.3 (at Z=0)
+
+Implement:
+
+1. mediapipeToThreeJS(nx, ny, nz, depthScale = 0.5):
+   - nx: 0.0 (left edge of webcam) → 1.0 (right edge)
+     Three.js X: MIRROR → threeX = -(nx * 8.8 - 4.4)
+     (mirrored so that viewer's right hand = right side of screen)
+   - ny: 0.0 (top) → 1.0 (bottom)
+     Three.js Y: threeY = -(ny * 6.6 - 3.3)
+   - nz: pseudo-depth from MediaPipe (negative = closer to camera)
+     Three.js Z: threeZ = nz * depthScale  (subtle depth only)
+   - Returns: { x: threeX, y: threeY, z: threeZ }
+
+2. mediapipeToScreenPercent(nx, ny):
+   - Converts to CSS percentage for UI overlay positioning
+   - Mirror X: xPercent = (1 - nx) * 100
+   - yPercent = ny * 100
+   - Returns: { xPercent, yPercent }
+
+Export both functions as named exports.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 2
+       Σήκωσε το χέρι σου μπροστά στην κάμερα.
+       Πρέπει να βλέπεις στο console:
+         "hands:update → left detected: true, x: 0.45, y: 0.32"
+       FPS counter > 25 fps.
+       Κάνε γρήγορο swipe → console: "gesture:swipe → left" ή "right"
+       ΜΗΝ προχωρήσεις αν το tracking δεν δουλεύει.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4: ΦΑΣΗ 3 — GRAPHICS ENGINE (Three.js + Particles + Holographic Hand)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΣΤΟΧΟΣ: Particles που απωθούνται από το χέρι + glowing skeleton χεριού στο 3D scene.
+
+────────────────────────────────────────────────────────────────────
+PROMPT 3.1 — GraphicsEngine.js (Scene Setup)
+────────────────────────────────────────────────────────────────────
+
+Create src/engines/GraphicsEngine.js as an ES Module.
+Import THREE from 'three' (via importmap).
+Import { state } from '../core/StateManager.js'
+Import { on } from '../core/EventBus.js'
+
+class GraphicsEngine:
+
+async init(canvasElement):
+  this.canvas = canvasElement
+
+  // Renderer
+  this.renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true })
+  this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  this.renderer.setSize(window.innerWidth, window.innerHeight)
+  this.renderer.shadowMap.enabled = true
+  this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+
+  // Scene
+  this.scene = new THREE.Scene()
+  this.scene.background = new THREE.Color(0x000008)
+  this.scene.fog = new THREE.FogExp2(0x000008, 0.018)
+
+  // Camera
+  this.camera = new THREE.PerspectiveCamera(75,
+    window.innerWidth / window.innerHeight, 0.1, 1000)
+  this.camera.position.set(0, 0, 5)
+
+  // Lights
+  this.ambientLight = new THREE.AmbientLight(0x111111, 1)
+  this.scene.add(this.ambientLight)
+  this.sunLight = new THREE.PointLight(0xffffff, 2, 100)
+  this.sunLight.castShadow = true
+  this.sunLight.shadow.mapSize.setScalar(512)
+  this.scene.add(this.sunLight)
+
+  // Sub-systems
+  this.particleSystem = new ParticleSystem(this.scene, 'medium')
+  this.holoHands = {
+    left:  new HolographicHand(this.scene, 'left'),
+    right: new HolographicHand(this.scene, 'right')
+  }
+
+  // Handle resize
+  window.addEventListener('resize', () => this._onResize())
+
+  // EventBus listeners
+  on('graphics:quality', ({ level }) => this.setQuality(level))
+
+update(deltaTime):
+  const { hands, particles } = state
+  this.particleSystem.update(deltaTime, particles)
+  this.holoHands.left.update(hands.left)
+  this.holoHands.right.update(hands.right)
+  this.renderer.render(this.scene, this.camera)
+
+setQuality(level):
+  updateState('quality', level)
+  this.particleSystem.setQuality(level)
+  switch(level) {
+    case 'low':    this.renderer.setPixelRatio(1); break
+    case 'medium': this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); break
+    case 'high':   this.renderer.setPixelRatio(devicePixelRatio); break
+  }
+
+_onResize():
+  this.camera.aspect = innerWidth / innerHeight
+  this.camera.updateProjectionMatrix()
+  this.renderer.setSize(innerWidth, innerHeight)
+
+destroy(): dispose renderer, remove resize listener
+
+────────────────────────────────────────────────────────────────────
+PROMPT 3.2 — ParticleSystem class (add inside GraphicsEngine.js)
+────────────────────────────────────────────────────────────────────
+
+Add class ParticleSystem inside GraphicsEngine.js (not exported).
+
+constructor(scene, quality):
+  this.quality = quality
+  this.frameCounter = 0
+  this._initParticles(scene)
+
+_initParticles(scene):
+  COUNTS = { low: 3000, medium: 8000, high: 15000 }
+  const count = COUNTS[this.quality]
+
+  // Home positions (Float32Array, stays constant)
+  this.homePositions = new Float32Array(count * 3)
+  // Current positions (updated each frame)
+  this.positions = new Float32Array(count * 3)
+  // Velocities
+  this.velocities = new Float32Array(count * 3)
+
+  for each particle i:
+    homeX = random(-8, 8), homeY = random(-6, 6), homeZ = random(-5, 2)
+    homePositions[i*3..] = homeX, homeY, homeZ
+    positions[i*3..] = homeX, homeY, homeZ
+    velocities[i*3..] = 0, 0, 0
+
+  // Color: gradient blue→cyan with variation
+  colors = new Float32Array(count * 3)
+  for each particle: mix 0x0033ff and 0x00ffff with random blend
+
+  geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+
+  material = new THREE.PointsMaterial({
+    size: 0.02,
+    vertexColors: true,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true
+  })
+
+  this.points = new THREE.Points(geometry, material)
+  scene.add(this.points)
+
+update(deltaTime, particleState):
+  this.frameCounter++
+  // In LOW quality: skip every other frame
+  if (this.quality === 'low' && this.frameCounter % 2 !== 0) return
+
+  const { repulsionX, repulsionY, repulsionStrength } = particleState
+  const REPULSION_RADIUS = 1.5
+  const SPRING_STRENGTH = 0.02
+  const DAMPING = 0.95
+  const MAX_FORCE = 0.05
+
+  for each particle i:
+    px = positions[i*3], py = positions[i*3+1], pz = positions[i*3+2]
+    hx = homePositions[i*3], hy = homePositions[i*3+1], hz = homePositions[i*3+2]
+
+    // Repulsion from hand
+    dx = px - repulsionX, dy = py - repulsionY
+    dist = sqrt(dx*dx + dy*dy)
+    if (dist < REPULSION_RADIUS && repulsionStrength > 0 && dist > 0.001):
+      force = min(repulsionStrength / (dist * dist), MAX_FORCE)
+      velocities[i*3]   += (dx / dist) * force
+      velocities[i*3+1] += (dy / dist) * force
+
+    // Spring back to home
+    velocities[i*3]   += (hx - px) * SPRING_STRENGTH
+    velocities[i*3+1] += (hy - py) * SPRING_STRENGTH
+    velocities[i*3+2] += (hz - pz) * SPRING_STRENGTH
+
+    // Damping
+    velocities[i*3]   *= DAMPING
+    velocities[i*3+1] *= DAMPING
+    velocities[i*3+2] *= DAMPING
+
+    // Update position
+    positions[i*3]   += velocities[i*3]
+    positions[i*3+1] += velocities[i*3+1]
+    positions[i*3+2] += velocities[i*3+2]
+
+  geometry.attributes.position.needsUpdate = true
+
+setQuality(level): rebuild particles with new count if level changed
+
+────────────────────────────────────────────────────────────────────
+PROMPT 3.3 — HolographicHand class (add inside GraphicsEngine.js)
+────────────────────────────────────────────────────────────────────
+
+Add class HolographicHand inside GraphicsEngine.js (not exported).
+Import { mediapipeToThreeJS } from '../utils/CoordinateMapper.js'
+
+MediaPipe hand topology — finger connections:
+  CONNECTIONS = [
+    [0,1],[1,2],[2,3],[3,4],          // Thumb
+    [0,5],[5,6],[6,7],[7,8],          // Index
+    [0,9],[9,10],[10,11],[11,12],     // Middle
+    [0,13],[13,14],[14,15],[15,16],   // Ring
+    [0,17],[17,18],[18,19],[19,20],   // Pinky
+    [5,9],[9,13],[13,17]              // Palm cross
+  ]
+
+constructor(scene, handedness):
+  this.handedness = handedness
+  this.group = new THREE.Group()
+  scene.add(this.group)
+  this.pulsePhase = 0
+
+  // 21 landmark spheres
+  const sphereGeo = new THREE.SphereGeometry(0.015, 6, 6)
+  this.spheres = Array.from({length: 21}, () => {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff, transparent: true, opacity: 0.9
+    })
+    const mesh = new THREE.Mesh(sphereGeo, mat)
+    mesh.renderOrder = 999
+    mesh.visible = false
+    this.group.add(mesh)
+    return mesh
+  })
+
+  // Connection lines
+  this.lines = CONNECTIONS.map(([a, b]) => {
+    const geo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(), new THREE.Vector3()  // placeholder points
+    ])
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x0088ff, transparent: true, opacity: 0.6
+    })
+    const line = new THREE.Line(geo, mat)
+    line.visible = false
+    this.group.add(line)
+    return { line, a, b }
+  })
+
+  this.landmarkPositions = new Array(21).fill(null).map(() => new THREE.Vector3())
+
+update(handData):
+  if (!handData || !handData.detected):
+    this.spheres.forEach(s => s.visible = false)
+    this.lines.forEach(({ line }) => line.visible = false)
+    return
+
+  this.pulsePhase += 0.05
+  const pulseScale = 1 + Math.sin(this.pulsePhase) * 0.05
+  const pinching = handData.pinching  // already set in state by TrackingEngine
+
+  // Update landmark positions
+  handData.landmarks.forEach((lm, i) => {
+    const { x, y, z } = mediapipeToThreeJS(lm.x, lm.y, lm.z)
+    this.landmarkPositions[i].set(x, y, z)
+
+    this.spheres[i].position.copy(this.landmarkPositions[i])
+    this.spheres[i].scale.setScalar(pulseScale)
+    this.spheres[i].visible = true
+
+    // Pinch highlight on thumb tip (4) and index tip (8)
+    const isPinchPoint = (i === 4 || i === 8)
+    this.spheres[i].material.color.setHex(
+      (isPinchPoint && pinching) ? 0xff00ff : 0x00ffff
+    )
+  })
+
+  // Update connection lines
+  this.lines.forEach(({ line, a, b }) => {
+    const positions = line.geometry.attributes.position
+    positions.setXYZ(0, ...this.landmarkPositions[a].toArray())
+    positions.setXYZ(1, ...this.landmarkPositions[b].toArray())
+    positions.needsUpdate = true
+    line.visible = true
+  })
+
+────────────────────────────────────────────────────────────────────
+PROMPT 3.4 — Connect TrackingEngine output to GraphicsEngine state
+────────────────────────────────────────────────────────────────────
+
+Modify src/engines/TrackingEngine.js — add full landmark data to state.
+
+When LANDMARKS message arrives from Worker and a hand IS detected:
+  1. Store full landmarks array in handData:
+       updateState("hands.left.landmarks", data.left.landmarks)
+       updateState("hands.right.landmarks", data.right.landmarks)
+     (HolographicHand.update() will read these from state.hands.left.landmarks)
+  2. Run isPinching() for each hand, update state.hands.[side].pinching
+     Emit 'gesture:pinch' only when state changes (rise/fall edge)
+  3. Run applySmoothing() on palm center coords (factor 0.12)
+  4. Convert palm center to Three.js via mediapipeToThreeJS()
+  5. Update StateManager:
+       state.particles.repulsionX = threeCoords.x
+       state.particles.repulsionY = threeCoords.y
+       state.particles.repulsionStrength = both detected ? 3.0 : 2.0
+  6. Add palm X (normalized, NOT mirrored) to swipe history buffer
+     (circular buffer, length 15)
+  7. Run detectSwipe(history, cooldownRef) for each hand separately
+     Emit 'gesture:swipe' if result is not null
+
+NOTE: StateManager.state was using flat x/y/z for hands, now also stores
+landmarks array. Make sure updateState supports this cleanly.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 3
+       Σήκωσε το χέρι σου μπροστά στην κάμερα. Πρέπει να βλέπεις:
+       - Glowing cyan skeleton του χεριού στην οθόνη (21 points + lines)
+       - Particles να απωθούνται γύρω από το χέρι
+       - Κάνε pinch: δύο fingertips γίνονται magenta
+       - Γρήγορο swipe: console "gesture:swipe → left/right"
+       FPS target: > 30
+       Αν FPS < 30: πάτα Q για LOW quality και δες αν βελτιώνεται.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5: ΦΑΣΗ 4 — AUDIO ENGINE (Tone.js)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΣΤΟΧΟΣ: Μουσική που παίζει με sync, και αντιδρά στις κινήσεις των χεριών.
+
+ΣΗΜΕΙΩΣΗ: Tone.js φορτώνεται ως global (window.Tone) από CDN. Δεν το importάρεις
+ως ES module, απλώς χρησιμοποιείς Tone.xxx μέσα στο AudioEngine.
+
+────────────────────────────────────────────────────────────────────
+PROMPT 4.1 — AudioEngine.js (Core Setup)
+────────────────────────────────────────────────────────────────────
+
+Create src/engines/AudioEngine.js as an ES Module.
+Import { state, updateState } from '../core/StateManager.js'
+Import { on, emit } from '../core/EventBus.js'
+Tone is a global object (loaded from CDN) — no import needed.
+
+class AudioEngine:
+
+async init():
+  Tone.Transport.bpm.value = 120
+
+  // Signal chain setup (done BEFORE loading samples)
+  this.masterVol = new Tone.Volume(-6).toDestination()
+
+  // Drums: direct to master
+  this.drumsVol = new Tone.Volume(0).connect(this.masterVol)
+  this.drums = new Tone.Player({
+    url: "assets/audio/drums.mp3",
+    loop: true,
+    autostart: false
+  }).connect(this.drumsVol)
+
+  // Bass: Volume → Filter → master
+  this.bassFilter = new Tone.Filter(8000, "lowpass").connect(this.masterVol)
+  this.bassVol = new Tone.Volume(-6).connect(this.bassFilter)
+  this.bass = new Tone.Player({
+    url: "assets/audio/bass.mp3",
+    loop: true,
+    autostart: false
+  }).connect(this.bassVol)
+
+  // Melody: Volume → Filter → master
+  this.melodyFilter = new Tone.Filter(8000, "highpass").connect(this.masterVol)
+  this.melodyVol = new Tone.Volume(-6).connect(this.melodyFilter)
+  this.melody = new Tone.Player({
+    url: "assets/audio/melody.mp3",
+    loop: true,
+    autostart: false
+  }).connect(this.melodyVol)
+
+  await Tone.loaded()
+  this.samplesLoaded = true
+  console.log("AudioEngine: all samples loaded")
+
+async play():
+  if (!this.samplesLoaded) return
+  await Tone.start()         // REQUIRED: browser autoplay policy
+  Tone.Transport.start()
+  this.drums.start(0)
+  this.bass.start(0)
+  this.melody.start(0)
+  updateState("isPlaying", true)
+  emit('audio:play')
+
+stop():
+  Tone.Transport.stop()
+  this.drums.stop()
+  this.bass.stop()
+  this.melody.stop()
+  updateState("isPlaying", false)
+  emit('audio:stop')
+
+setVolume(stem, value):  // value: 0.0 to 1.0
+  const db = value < 0.001 ? -Infinity : Tone.gainToDb(value)
+  const node = { drums: this.drumsVol, bass: this.bassVol, melody: this.melodyVol }[stem]
+  if (node) node.volume.rampTo(db, 0.05)
+  updateState(`audio.${stem}Volume`, value)
+  emit('audio:volumeChange', { stem, value })
+
+setFilter(type, frequency):
+  const clamped = Math.max(200, Math.min(15000, frequency))
+  const filter = type === 'lowpass' ? this.bassFilter : this.melodyFilter
+  filter.frequency.rampTo(clamped, 0.1)
+  updateState("audio.filterCutoff", clamped)
+
+triggerLoopChange():
+  // Schedule at next bar boundary (4 beats at 120bpm = 2 seconds)
+  const nextBar = Tone.Transport.nextSubdivision("1m")
+  Tone.Transport.scheduleOnce(() => {
+    // Brief drums dip — swaps feel of the loop
+    this.drumsVol.volume.rampTo(-20, 0.1)
+    Tone.Transport.scheduleOnce(() => {
+      this.drumsVol.volume.rampTo(0, 0.3)
+    }, "+0.3")
+    emit('audio:loopChange')
+  }, nextBar)
+
+update(deltaTime):
+  if (!state.isPlaying) return
+  // Left hand Y → bass volume (inverted: hand up = loud)
+  if (state.hands.left.detected):
+    const bassVol = 1 - state.hands.left.y   // y is already mapped to 0-1 range
+    // Clamp to 0-1
+    this.setVolume('bass', Math.max(0, Math.min(1, bassVol)))
+  // Right hand Y → melody volume
+  if (state.hands.right.detected):
+    const melVol = 1 - state.hands.right.y
+    this.setVolume('melody', Math.max(0, Math.min(1, melVol)))
+
+  IMPORTANT: y in StateManager is in Three.js space (-3.3 to +3.3).
+  Normalize before using: normY = (y + 3.3) / 6.6
+  Then: volume = 1 - normY
+
+destroy(): Tone.Transport.stop(), dispose all nodes
+
+────────────────────────────────────────────────────────────────────
+PROMPT 4.2 — Connect Audio to Gestures (modify main.js)
+────────────────────────────────────────────────────────────────────
+
+Modify main.js — add EventBus event listeners after all engines init.
+
+1. on('gesture:swipe', ({ direction }) => {
+     AudioEngine.triggerLoopChange()
+     // 'audio:loopChange' will be emitted by triggerLoopChange
+     // SolarSystem (Phase 5) will listen to that event for camera fly-to
+   })
+
+2. Track right-hand pinch + drag for filter sweep:
+   let pinchStartX = null
+   on('gesture:pinch', ({ hand, active }) => {
+     if (hand !== 'right') return
+     if (active) {
+       pinchStartX = state.hands.right.x  // Three.js X at pinch moment
+     } else {
+       pinchStartX = null
+     }
+   })
+
+   In animation loop (before render — add to init()):
+   if (pinchStartX !== null && state.hands.right.detected) {
+     const delta = state.hands.right.x - pinchStartX    // range ≈ -4 to +4
+     const normalized = (delta + 4) / 8                  // 0 to 1
+     const freq = 500 + normalized * 11500               // 500–12000 Hz
+     AudioEngine.setFilter('lowpass', freq)
+   }
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ✅ CHECKPOINT 4
+       - Spacebar → μουσική αρχίζει
+       - Αριστερό χέρι ψηλά → bass δυνατά / χαμηλά → bass σιγά
+       - Δεξί χέρι → melody volume
+       - Pinch δεξί + drag → ακούς filter sweep
+       - Γρήγορο swipe → brief drums dip + console "audio:loopChange"
+       Αν δεν ακούς ήχο: βεβαιώσου ότι πάτησες Spacebar (user interaction
+       required για browser audio context).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6: ΦΑΣΗ 5 — SOLAR SYSTEM AESTHETICS  [OPTIONAL]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΣΤΟΧΟΣ: Visual impact — planets, camera flyby, dynamic lighting.
+Αυτή η φάση είναι OPTIONAL. Κάνε τη μετά από Phase 6 αν θέλεις.
+
+────────────────────────────────────────────────────────────────────
+PROMPT 5.1 — SolarSystem class (add to GraphicsEngine.js)
+────────────────────────────────────────────────────────────────────
+
+Add class SolarSystem inside GraphicsEngine.js.
+Initialize it from GraphicsEngine.init() and update from GraphicsEngine.update().
+Do NOT use GSAP — implement simple lerp-based camera animation internally.
+
+PLANET_DATA = [
+  { name:'earth',   radius:0.4, distance:4,   orbitSpeed:0.005,  texture:'earth.jpg'   },
+  { name:'mars',    radius:0.3, distance:6,   orbitSpeed:0.003,  texture:'mars.jpg'    },
+  { name:'jupiter', radius:0.7, distance:9,   orbitSpeed:0.001,  texture:'jupiter.jpg' },
+  { name:'saturn',  radius:0.6, distance:12,  orbitSpeed:0.0007, texture:null          }
+]
+
+CAMERA_TARGETS sequence: ['sun', 'earth', 'mars', 'jupiter', 'saturn']
+  (cycles on each 'audio:loopChange' event)
+
+constructor(scene, camera, quality):
+  Create Sun:
+    - SphereGeometry(1.5, 32, 32)
+    - MeshBasicMaterial, texture only if quality !== 'low' (else color 0xffaa44)
+    - Add a slightly larger sphere (SphereGeometry(1.8, 16, 16)) as glow:
+        MeshBasicMaterial, color 0xff6600, transparent, opacity 0.15,
+        AdditiveBlending, depthWrite false
+    - Slow Y-axis rotation: 0.001 rad/frame
+
+  Create Planets (array):
+    For each planet:
+      - SphereGeometry, MeshStandardMaterial
+      - If quality !== 'low' and texture exists: load texture
+      - Else: fallback colors (earth=0x2255aa, mars=0xcc3300, jupiter=0xddaa55, saturn=0xddcc88)
+      - this.orbitAngles[i] = random(0, TWO_PI)  (stagger initial positions)
+
+  this.targetIndex = 0
+  this.cameraLerpT = 1.0  (1.0 = animation complete)
+  this.cameraLerpFrom = new THREE.Vector3()
+  this.cameraLerpTo = new THREE.Vector3()
+  this.lookAtLerpTo = new THREE.Vector3()
+
+  on('audio:loopChange', () => this._advanceTarget())
+
+_advanceTarget():
+  this.targetIndex = (this.targetIndex + 1) % CAMERA_TARGETS.length
+  const targetName = CAMERA_TARGETS[this.targetIndex]
+  updateState('camera.currentTarget', targetName)
+  updateState('camera.isAnimating', true)
+
+  // Determine camera destination
+  const targetPos = targetName === 'sun'
+    ? new THREE.Vector3(0, 1.5, 4)  // offset from sun center
+    : this._getPlanetWorldPos(targetName).clone().add(new THREE.Vector3(0, 0.5, 1.5))
+
+  this.cameraLerpFrom.copy(this.camera.position)
+  this.cameraLerpTo.copy(targetPos)
+  this.lookAtLerpTo.copy(targetName === 'sun' ? new THREE.Vector3() : this._getPlanetWorldPos(targetName))
+  this.cameraLerpT = 0.0
+
+  // Trigger color palette transition
+  this.colorSystem.transitionTo(targetName)
+
+update(deltaTime):
+  // Rotate sun
+  this.sun.rotation.y += 0.001
+
+  // Orbit planets
+  this.planets.forEach((planet, i) => {
+    this.orbitAngles[i] += PLANET_DATA[i].orbitSpeed
+    const d = PLANET_DATA[i].distance
+    planet.position.set(
+      Math.cos(this.orbitAngles[i]) * d,
+      0,
+      Math.sin(this.orbitAngles[i]) * d
+    )
+    planet.rotation.y += 0.005
+  })
+
+  // Smooth camera animation (lerp over ~2 seconds)
+  if (this.cameraLerpT < 1.0) {
+    this.cameraLerpT = Math.min(1.0, this.cameraLerpT + deltaTime * 0.5)
+    const t = this._easeInOut(this.cameraLerpT)
+    this.camera.position.lerpVectors(this.cameraLerpFrom, this.cameraLerpTo, t)
+    this.camera.lookAt(this.lookAtLerpTo)
+    if (this.cameraLerpT >= 1.0) updateState('camera.isAnimating', false)
+  }
+
+_easeInOut(t): return t < 0.5 ? 2*t*t : -1+(4-2*t)*t
+
+────────────────────────────────────────────────────────────────────
+PROMPT 5.2 — Dynamic Color Palettes (add to GraphicsEngine.js)
+────────────────────────────────────────────────────────────────────
+
+Add class ColorSystem inside GraphicsEngine.js.
+This handles smooth light and particle color transitions between planets.
+
+PALETTES = {
+  sun:     { ambient: 0x221100, pointLight: 0xffaa44, particle: 0xff6600, fog: 0x050200 },
+  earth:   { ambient: 0x001122, pointLight: 0x4488ff, particle: 0x00ccff, fog: 0x000508 },
+  mars:    { ambient: 0x220800, pointLight: 0xff4400, particle: 0xff2200, fog: 0x050100 },
+  jupiter: { ambient: 0x110022, pointLight: 0xaa44ff, particle: 0x8800ff, fog: 0x030005 },
+  saturn:  { ambient: 0x111100, pointLight: 0xffdd00, particle: 0xffaa00, fog: 0x050400 }
+}
+
+constructor(ambientLight, pointLight, particleSystem, scene):
+  this.currentPalette = { ...PALETTES.sun }
+  this.targetPalette = { ...PALETTES.sun }
+  this.lerpT = 1.0
+
+transitionTo(planetName):
+  this.targetPalette = PALETTES[planetName]
+  this.lerpT = 0.0
+
+update(deltaTime):
+  if this.lerpT >= 1.0: return
+  this.lerpT = min(1.0, this.lerpT + deltaTime * 0.5)
+  const t = this.lerpT
+
+  // Lerp colors
+  ambientLight.color.lerpColors(
+    new THREE.Color(this.currentPalette.ambient),
+    new THREE.Color(this.targetPalette.ambient), t)
+  pointLight.color.lerpColors(
+    new THREE.Color(this.currentPalette.pointLight),
+    new THREE.Color(this.targetPalette.pointLight), t)
+  scene.fog.color.lerpColors(
+    new THREE.Color(this.currentPalette.fog),
+    new THREE.Color(this.targetPalette.fog), t)
+  particleSystem.setColor(  // add setColor() to ParticleSystem
+    new THREE.Color(this.currentPalette.particle).lerp(
+      new THREE.Color(this.targetPalette.particle), t))
+
+  if (this.lerpT >= 1.0): this.currentPalette = { ...this.targetPalette }
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7: ΦΑΣΗ 6 — POLISH & PERFORMANCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+────────────────────────────────────────────────────────────────────
+PROMPT 6.1 — Auto Quality Manager (add to GraphicsEngine.js)
+────────────────────────────────────────────────────────────────────
+
+Add auto-quality management to GraphicsEngine.
+
+Add to init():
+  this.fpsHistory = []
+  this.qualityCheckInterval = setInterval(() => this._checkQuality(), 5000)
+
+_checkQuality():
+  if (state.quality !== 'auto') return
+  const avg = this.fpsHistory.reduce((a,b) => a+b, 0) / this.fpsHistory.length
+  this.fpsHistory = []
+
+  const LEVELS = ['low', 'medium', 'high']
+  const current = state.quality === 'auto' ? this._currentAutoLevel : state.quality
+
+  if (avg < 25 && current !== 'low') {
+    this._currentAutoLevel = LEVELS[Math.max(0, LEVELS.indexOf(current) - 1)]
+    console.log(`[AutoQuality] FPS ${avg.toFixed(0)} < 25 → stepping down to ${this._currentAutoLevel}`)
+    this.setQuality(this._currentAutoLevel)
+  } else if (avg > 55 && current !== 'high') {
+    this._currentAutoLevel = LEVELS[Math.min(2, LEVELS.indexOf(current) + 1)]
+    console.log(`[AutoQuality] FPS ${avg.toFixed(0)} > 55 → stepping up to ${this._currentAutoLevel}`)
+    this.setQuality(this._currentAutoLevel)
+  }
+
+In update(): push current FPS to this.fpsHistory (calculate from deltaTime)
+
+Quality level specs:
+  LOW:
+    - Particles: 3000, physics every 2nd frame
+    - renderer.shadowMap.enabled = false
+    - Textures: not loaded (solid colors)
+    - renderer.setPixelRatio(1)
+    - HolographicHand: lines only, sphere meshes hidden
+  MEDIUM (default):
+    - Particles: 8000
+    - Shadows: enabled, 512px shadow map
+    - Pixel ratio: min(devicePixelRatio, 1.5)
+    - Full holographic hand (spheres + lines)
+  HIGH:
+    - Particles: 15000
+    - Shadows: enabled, 1024px shadow map
+    - Pixel ratio: devicePixelRatio
+    - Full holographic hand
+    - (Optional bloom: use UnrealBloomPass if FPS allows)
+
+────────────────────────────────────────────────────────────────────
+PROMPT 6.2 — HUD Overlay (add to main.js or separate hud.js)
+────────────────────────────────────────────────────────────────────
+
+Create a HUD that updates every 100ms (never on every frame — DOM is expensive).
+
+Add to index.html #ui-overlay:
+  <div id="hud-bpm">120 BPM</div>              <!-- top center -->
+  <div id="hud-stems">                          <!-- bottom left -->
+    <span id="stem-drums" class="stem-dot">●</span>
+    <span id="stem-bass"  class="stem-dot">●</span>
+    <span id="stem-melody" class="stem-dot">●</span>
+  </div>
+  <div id="hud-planet"></div>                   <!-- bottom right, fades in/out -->
+  <div id="hud-quality">M</div>                 <!-- top right: L/M/H/A -->
+  <div id="hud-hands">
+    <span id="hand-left"  class="hand-dot">L</span>
+    <span id="hand-right" class="hand-dot">R</span>
+  </div>                                        <!-- top left, below fps -->
+
+CSS for HUD:
+  .stem-dot:   color #333 by default; transitions to white/cyan/magenta when active
+  .hand-dot:   color #333 not detected; color #00ff88 detected; font-size 10px
+  #hud-planet: color white; font-size 18px; opacity 0 by default;
+               transition opacity 0.5s; fade-in for 3s on camera change
+
+HUD update function (setInterval 100ms):
+  - BPM: state.bpm
+  - Stems: state.isPlaying → color stems appropriately
+  - Quality: 'L'/'M'/'H'/'A' ← first letter
+  - Hands: left.detected, right.detected → color dots
+  - Planet: listen to EventBus 'audio:loopChange' → show new planet name for 3s
+
+Key H: toggle #ui-overlay visibility (for clean projection)
+Key F: toggle FPS counter visibility
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8: ΦΑΣΗ 7 — PROJECTION MAPPING  [OPTIONAL / ΑΡΓΟΤΕΡΑ]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΣΗΜΕΙΩΣΗ: Μόνο αφού το project τρέχει σταθερά χωρίς projector.
+Αυτή η φάση είναι για live performance/installation με projector.
+
+────────────────────────────────────────────────────────────────────
+PROMPT 7.1 — Keystone Calibration (Projection Mapping)
+────────────────────────────────────────────────────────────────────
+
+Add keystone correction to GraphicsEngine.js using a post-process shader pass.
+
+Technical approach:
+  1. Render Three.js scene to WebGLRenderTarget (offscreen)
+  2. Apply quad-warp shader (perspective-correct)
+  3. Render warped result to final canvas
+
+Calibration mode toggle: Ctrl+Shift+K
+
+When calibration mode ON:
+  - Overlay 4 draggable HTML corner handles on canvas
+  - Initial positions: corners of canvas (TL, TR, BL, BR)
+  - User drags handles to match projector trapezoid
+  - Save 4 corner positions to localStorage key 'dj-viz-keystone'
+  - Load on startup if exists
+
+Warp shader (WebGL fragment shader):
+  - Uniforms: sampler2D uTexture, vec2 uTL, uTR, uBL, uBR (corner positions 0-1)
+  - For each fragment: compute bilinear UV from warped quad
+  - Use perspective-correct interpolation (homogeneous coords)
+
+Performance:
+  - When calibration mode OFF: render directly (NO extra render pass)
+  - When calibration mode ON: add one extra fullscreen quad render pass
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9: ΚΑΝΟΝΕΣ ΓΙΑ ΤΑ AI PROMPTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΚΑΝΟΝΑΣ 1 — Ένα αρχείο τη φορά
+  ΛΑΘΟΣ: "Γράψε μου όλο το project"
+  ΣΩΣΤΟ: "Γράψε μόνο το StateManager.js όπως περιγράφεται στο prompt 1.3"
+
+ΚΑΝΟΝΑΣ 2 — Δώσε πάντα context
+  Πριν ζητήσεις το επόμενο module, επικόλλησε τα αρχεία που ήδη έχεις:
+  "Αυτό είναι το EventBus.js: [code]
+   Αυτό είναι το StateManager.js: [code]
+   Τώρα γράψε το TrackingEngine.js που χρησιμοποιεί και τα δύο."
+
+ΚΑΝΟΝΑΣ 3 — Ζήτα FPS-safe κώδικα
+  Πρόσθεσε στο τέλος κάθε prompt:
+  "Ensure this does not block the main thread and is safe to run at 60fps."
+
+ΚΑΝΟΝΑΣ 4 — Ζήτα error handling
+  Πρόσθεσε:
+  "Handle all edge cases gracefully — null values, failed loads, permission denied
+   — without throwing uncaught exceptions or crashing the application."
+
+ΚΑΝΟΝΑΣ 5 — Test πριν προχωρήσεις
+  Περνάς ΠΑΝΤΑ το checkpoint πριν ζητήσεις τον επόμενο prompt.
+
+ΚΑΝΟΝΑΣ 6 — Debugging prompt template
+  "Here is my [filename]:
+   [paste code]
+
+   The problem is: [describe exactly what you see vs what you expect]
+   Console errors: [paste exact error messages]
+
+   Identify the root cause and fix only the problematic section.
+   Do not rewrite unrelated code."
+
+ΚΑΝΟΝΑΣ 7 — Refactoring prompt template
+  "This file is getting large. What can be extracted into helper functions
+   without changing the public API or external behavior? Suggest only,
+   do not rewrite yet."
+
+ΚΑΝΟΝΑΣ 8 — Νέος: Ζήτα verification
+  Στο τέλος κάθε prompt πρόσθεσε:
+  "After writing the code, list any assumptions you made about external
+   dependencies, and flag anything that might need adjustment."
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10: ΓΝΩΣΤΑ ΠΡΟΒΛΗΜΑΤΑ & ΛΥΣΕΙΣ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ΠΡΟΒΛΗΜΑ: "Tone.js δεν παίζει ήχο"
+  ΛΥΣΗ: Browser απαιτεί user gesture πριν από audio.
+  Πάντα κάλεσε Tone.start() μέσα σε click/keypress handler (το Spacebar shortcut
+  στο main.js το κάνει αυτό σωστά).
+
+ΠΡΟΒΛΗΜΑ: "MediaPipe Worker δεν φορτώνει — SecurityError / NetworkError"
+  ΛΥΣΗ 1: Τρέχεις από file://? Άνοιξε με Live Server (http://)
+  ΛΥΣΗ 2: CORS: το MediaPipe CDN επιτρέπει cross-origin. Αν χρησιμοποιείς
+           τοπικό αρχείο, σέρβαρέ το μέσω Live Server.
+  ΛΥΣΗ 3: Αν το importScripts() αποτυγχάνει: δοκίμασε να κατεβάσεις το
+           vision_bundle.js τοπικά στο src/workers/vision_bundle.js
+           και χρησιμοποίησε: importScripts('/src/workers/vision_bundle.js')
+
+ΠΡΟΒΛΗΜΑ: "MediaPipe error: Cannot use GPU delegate inside Worker"
+  ΛΥΣΗ: Άλλαξε delegate σε 'CPU' στο mediapipe.worker.js
+  Η απόδοση είναι ελαφρά χαμηλότερη αλλά αρκετή για Lite model.
+
+ΠΡΟΒΛΗΜΑ: "Χέρι: jitter / τρεμοπαίζει"
+  ΛΥΣΗ 1: Μείωσε factor στο applySmoothing() από 0.12 σε 0.07
+  ΛΥΣΗ 2: Αύξησε swipe history buffer από 15 σε 20 frames
+  ΛΥΣΗ 3: Απόρριψε landmarks με confidence < 0.6 (πρόσθεσε threshold)
+
+ΠΡΟΒΛΗΜΑ: "FPS κάτω από 20"
+  ΛΥΣΗ 1: Πάτα Q (LOW quality) — άμεση βελτίωση
+  ΛΥΣΗ 2: Μείωσε webcam resolution: width:320, height:240 στο TrackingEngine
+  ΛΥΣΗ 3: Frame skip: process 1 frame στα 2 από webcam
+  ΛΥΣΗ 4: Αν Chrome: ελέγξε chrome://gpu — WebGL πρέπει να έχει "Hardware accelerated"
+
+ΠΡΟΒΛΗΜΑ: "Coordinates χεριού ανεστραμμένα / δεξί-αριστερά"
+  ΛΥΣΗ: Στο CoordinateMapper, η X πρέπει να ανακλάται:
+  threeX = -(nx * 8.8 - 4.4)
+  Το αρνητικό πρόσημο κάνει mirror. Αν παραλείφθεί, το hand tracking είναι
+  σαν να βλέπεις σε mirror — κάθε κίνηση δεξιά στον κόσμο πηγαίνει αριστερά.
+
+ΠΡΟΒΛΗΜΑ: "Ήχος out of sync — κολλάει κάθε φορά που ενημερώνεται volume"
+  ΛΥΣΗ: ΜΗΝ καλείς setVolume() κάθε frame.
+  Χρησιμοποίησε rampTo() με 0.05s εντός του setVolume() (ήδη στον κώδικά σου).
+  Αν εξακολουθεί: αύξησε ramp time σε 0.1s.
+
+ΠΡΟΒΛΗΜΑ: "Three.js canvas δεν καλύπτει όλη την οθόνη / λευκό margin"
+  ΛΥΣΗ: Βεβαιώσου ότι στο CSS:
+    body { margin: 0; overflow: hidden; }
+    #main-canvas { display: block; width: 100vw; height: 100vh; }
+
+ΠΡΟΒΛΗΜΑ: "importmap δεν δουλεύει (TypeError: Failed to resolve module)"
+  ΛΥΣΗ: importmap υποστηρίζεται μόνο σε Chrome 89+, Firefox 108+, Safari 16.4+
+  Βεβαιώσου ότι το browser είναι ενημερωμένο.
+  Fallback: αντικατάστησε import 'three' με full CDN URL στο importmap.
+
+ΠΡΟΒΛΗΜΑ: "Το Worker δεν λαμβάνει το ImageBitmap (error: could not be cloned)"
+  ΛΥΣΗ: Βεβαιώσου ότι περνάς το bitmap ως Transferable:
+  worker.postMessage({ type:'PROCESS', bitmap }, [bitmap])
+  Το δεύτερο argument [bitmap] είναι το transferList. Χωρίς αυτό, προσπαθεί
+  να κάνει structured clone που αποτυγχάνει για ImageBitmap.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 11: TIMELINE & CHECKPOINTS ΣΥΝΟΨΗ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ΦΑΣΗ 0: Validation + Setup         1–2 μέρες   [ΔΕΝ παραλείπεται]
+  ΦΑΣΗ 1: Foundation Skeleton        2–3 μέρες   ✅ μαύρη οθόνη + FPS + loading
+  ΦΑΣΗ 2: Hand Tracking (Worker)     3–4 μέρες   ✅ skeleton + swipe console log
+  ΦΑΣΗ 3: Graphics + Particles       3–4 μέρες   ✅ particles απωθούνται
+  ΦΑΣΗ 4: Audio (Tone.js)            2–3 μέρες   ✅ μουσική + χέρι = volume
+  ΦΑΣΗ 5: Solar System             [OPT] 4–6 μέρες   ✅ planets + camera fly-to
+  ΦΑΣΗ 6: Polish & Performance       3–4 μέρες   ✅ loading screen + auto quality
+  ΦΑΣΗ 7: Projection Mapping       [OPT] 3–5 μέρες   ✅ keystone calibration
+  ──────────────────────────────────────────────────
+  ΣΥΝΟΛΟ (χωρίς optional):         ~14–20 μέρες  (χαλαρό ρυθμό)
+  ΣΥΝΟΛΟ (με όλα):                 ~24–31 μέρες
+
+ΣΕΙΡΑ ΑΡΧΕΙΩΝ (compile order — γράψε με αυτή τη σειρά):
+  1. index.html
+  2. styles.css
+  3. src/core/EventBus.js
+  4. src/core/StateManager.js
+  5. src/utils/GestureDetector.js
+  6. src/utils/CoordinateMapper.js
+  7. src/workers/mediapipe.worker.js
+  8. src/engines/TrackingEngine.js
+  9. src/engines/GraphicsEngine.js
+  10. src/engines/AudioEngine.js
+  11. main.js
+
+
+================================================================================
+  ΤΕΛΟΣ ΑΡΧΕΙΟΥ — dj-visualizer roadmap.txt
+  Ενημέρωσε αυτό το αρχείο καθώς το project εξελίσσεται.
+================================================================================

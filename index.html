@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DJ Visualizer</title>
+
+  <!-- Three.js importmap — allows: import * as THREE from 'three' -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <!-- Tone.js loaded as classic script (global window.Tone) BEFORE main module -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Three.js render target -->
+  <canvas id="main-canvas"></canvas>
+
+  <!-- Webcam source — hidden, fed into OffscreenCanvas → Web Worker -->
+  <video id="webcam" autoplay playsinline muted style="display:none"></video>
+
+  <!-- Webcam preview (top-right) -->
+  <div id="cam-preview" style="position:fixed;top:10px;right:10px;width:160px;height:120px;border:1px solid rgba(0,255,255,0.4);border-radius:4px;overflow:hidden;z-index:9998;opacity:0.85;">
+    <canvas id="cam-canvas" width="160" height="120" style="width:100%;height:100%;transform:scaleX(-1);"></canvas>
+  </div>
+
+  <!-- Waveform panel (below camera preview) -->
+  <div id="wave-panel" style="position:fixed;top:140px;right:10px;width:160px;z-index:9997;">
+    <canvas id="wave-canvas" width="160" height="120" style="width:160px;height:120px;display:block;"></canvas>
+  </div>
+
+  <!-- Click-to-start overlay (required by Chrome AudioContext autoplay policy) -->
+  <div id="start-overlay">
+    <div class="start-content">
+      <p>ZiSo VISUALIZER</p>
+      <button id="start-btn">▶ CLICK TO START</button>
+    </div>
+  </div>
+
+  <!-- Loading screen (Phase 6 polish) -->
+  <div id="loading-screen">
+    <div class="loading-content">
+      <h1>ZiSo VISUALIZER</h1>
+      <div class="loading-bar">
+        <div id="loading-progress"></div>
+      </div>
+      <p id="loading-status">Initializing...</p>
+    </div>
+  </div>
+
+  <!-- HUD overlay — pointer-events:none so it doesn't block gestures -->
+  <div id="ui-overlay">
+    <div id="hud-bpm">120 BPM</div>
+    <div id="hud-stems">
+      <span id="stem-drums"  class="stem-dot" title="Drums">●</span>
+      <span id="stem-bass"   class="stem-dot" title="Bass">●</span>
+      <span id="stem-melody" class="stem-dot" title="Melody">●</span>
+    </div>
+    <div id="hud-planet"></div>
+    <div id="hud-quality">L</div>
+    <div id="hud-hands">
+      <span id="hand-left"  class="hand-dot">L</span>
+      <span id="hand-right" class="hand-dot">R</span>
+    </div>
+  </div>
+
+  <!-- FPS counter (dev) -->
+  <div id="fps-counter" style="top:140px;">-- fps</div>
+  <div id="mp-fps" style="position:fixed;top:155px;left:10px;color:#0ff;font:bold 11px monospace;z-index:9999;opacity:0.7;">MP: -- fps</div>
+
+  <!-- Debug overlay (below wave panel) -->
+  <div id="debug-overlay" style="position:fixed;top:270px;right:10px;color:#fff;font:12px monospace;z-index:9999;opacity:0.85;background:rgba(0,0,0,0.5);padding:6px 10px;border-radius:4px;line-height:1.6;white-space:pre;">MODE: idle</div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
