@@ -71,79 +71,75 @@ function drawWaveforms() {
   if (!waveCtx) return;
   const W = 160, H = 120;
   waveCtx.clearRect(0, 0, W, H);
-  waveCtx.fillStyle = 'rgba(0,0,0,0.6)';
+  waveCtx.fillStyle = 'rgba(0,0,0,0.7)';
   waveCtx.fillRect(0, 0, W, H);
 
-  const waves = AudioEngine.getWaveforms?.();
-  if (!waves) return;
+  const fft = AudioEngine.getWaveforms?.();
+  if (!fft) return;
 
   const tracks = [
-    { key: 'bass',   color: '#ff8800', y: 15  },
-    { key: 'drums',  color: '#ff4444', y: 45  },
-    { key: 'melody', color: '#ffff00', y: 75  }
+    { key: 'bass',   color: '#ff8800', rowY: 2,  rowH: 27 },
+    { key: 'drums',  color: '#ff4444', rowY: 31, rowH: 27 },
+    { key: 'melody', color: '#ffff00', rowY: 60, rowH: 27 }
   ];
 
-  for (const { key, color, y } of tracks) {
-    const buf = waves[key];
-    const laneH = 22;
-    waveCtx.strokeStyle = color;
-    waveCtx.lineWidth = 1.5;
-    waveCtx.globalAlpha = 0.85;
-    waveCtx.shadowColor = color;
-    waveCtx.shadowBlur = 4;
-    waveCtx.beginPath();
-    for (let i = 0; i < buf.length; i++) {
-      const x = (i / (buf.length - 1)) * W;
-      const yv = y + buf[i] * laneH;
-      i === 0 ? waveCtx.moveTo(x, yv) : waveCtx.lineTo(x, yv);
-    }
-    waveCtx.stroke();
+  for (const { key, color, rowY, rowH } of tracks) {
+    const buf = fft[key]; // dB values (-∞ to 0)
+    const bins = buf.length;
+    const barW = (W - 1) / bins;
     // Label
-    waveCtx.shadowBlur = 0;
     waveCtx.font = '7px monospace';
     waveCtx.fillStyle = color;
-    waveCtx.globalAlpha = 0.7;
-    waveCtx.fillText(key.toUpperCase(), 3, y - 8);
+    waveCtx.globalAlpha = 0.6;
+    waveCtx.fillText(key.slice(0, 3).toUpperCase(), 2, rowY + 8);
+    // Frequency bars
+    waveCtx.shadowColor = color;
+    waveCtx.shadowBlur = 4;
+    for (let i = 0; i < bins; i++) {
+      const db = isFinite(buf[i]) ? Math.max(-80, buf[i]) : -80;
+      const norm = (db + 80) / 80;   // 0 (silent) → 1 (full)
+      const bh = Math.max(1, norm * rowH);
+      waveCtx.fillStyle = color;
+      waveCtx.globalAlpha = 0.6 + norm * 0.4;
+      waveCtx.fillRect(i * barW, rowY + rowH - bh, barW - 0.5, bh);
+    }
+    waveCtx.shadowBlur = 0;
+    waveCtx.globalAlpha = 1;
   }
-  waveCtx.globalAlpha = 1;
-  waveCtx.shadowBlur = 0;
+
+  // Separator
+  waveCtx.strokeStyle = 'rgba(255,255,255,0.15)';
+  waveCtx.lineWidth = 0.5;
+  waveCtx.beginPath();
+  waveCtx.moveTo(0, 92); waveCtx.lineTo(W, 92);
+  waveCtx.stroke();
 
   // ── Volume bars (bottom section) ──
   const barTop = 95;
   const barH   = 20;
-  const barW   = 40;
+  const barW2  = 40;
   const volBars = [
     { key: 'bass',   color: '#ff8800', x: 10  },
     { key: 'drums',  color: '#ff4444', x: 60  },
     { key: 'melody', color: '#ffff00', x: 110 },
   ];
-  // Separator
-  waveCtx.strokeStyle = 'rgba(255,255,255,0.18)';
-  waveCtx.lineWidth = 0.5;
-  waveCtx.beginPath();
-  waveCtx.moveTo(0, barTop - 2); waveCtx.lineTo(W, barTop - 2);
-  waveCtx.stroke();
-
   for (const { key, color, x } of volBars) {
     const vol = currentVols[key] ?? 0.7;
     const fillH = Math.max(1, vol * barH);
-    // Background track
     waveCtx.fillStyle = 'rgba(255,255,255,0.07)';
-    waveCtx.fillRect(x, barTop, barW, barH);
-    // Filled portion (bottom-up)
+    waveCtx.fillRect(x, barTop, barW2, barH);
     waveCtx.fillStyle = color;
     waveCtx.globalAlpha = 0.9;
     waveCtx.shadowColor = color;
     waveCtx.shadowBlur = 8;
-    waveCtx.fillRect(x, barTop + barH - fillH, barW, fillH);
+    waveCtx.fillRect(x, barTop + barH - fillH, barW2, fillH);
     waveCtx.globalAlpha = 1;
     waveCtx.shadowBlur = 0;
-    // Label
     waveCtx.font = '7px monospace';
     waveCtx.fillStyle = color;
     waveCtx.globalAlpha = 0.6;
     waveCtx.textAlign = 'center';
-    waveCtx.fillText(key.slice(0,3).toUpperCase(), x + barW / 2, barTop + barH + 9);
+    waveCtx.fillText(key.slice(0, 3).toUpperCase(), x + barW2 / 2, barTop + barH + 9);
     waveCtx.globalAlpha = 1;
     waveCtx.textAlign = 'left';
   }
@@ -322,13 +318,14 @@ function setupEventListeners() {
   on('hands:update', () => {
     const L = state.hands.left;
     const R = state.hands.right;
+    // Zoom: both hands pinching
     const bothPinching = L.detected && L.pinching && R.detected && R.pinching;
 
     if (bothPinching) {
       // Zoom: distance between the two pinching hands
       const dx = L.x - R.x, dy = L.y - R.y, dz = L.z - R.z;
       GraphicsEngine.setZoom(Math.sqrt(dx * dx + dy * dy + dz * dz));
-      // Orbit + roll: both hands still drive pinch deltas simultaneously
+      // Opposite Y → roll, same Y → tilt (handled inside SolarSystem via lDY-rDY)
       GraphicsEngine.updatePinch('left',  L.x, L.y);
       GraphicsEngine.updatePinch('right', R.x, R.y);
     } else {
@@ -390,6 +387,13 @@ function setupKeyboard() {
         break;
       case 'f': case 'F':               // DEV — toggle FPS counter
         fpsEl.style.display = fpsEl.style.display === 'none' ? '' : 'none';
+        break;
+      case 'd': case 'D':               // DEV — toggle debug overlay
+        if (debugEl.el) debugEl.el.style.display =
+          debugEl.el.style.display === 'none' ? '' : 'none';
+        break;
+      case 't': case 'T':               // DEV — tap tempo
+        AudioEngine.tapTempo?.();
         break;
     }
   });

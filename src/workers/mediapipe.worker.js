@@ -40,9 +40,9 @@ async function createHandLandmarker(delegate) {
     },
     runningMode: 'VIDEO',
     numHands: 2,
-    minHandDetectionConfidence: 0.35,
-    minHandPresenceConfidence: 0.35,
-    minTrackingConfidence: 0.3
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5
   });
 }
 
@@ -85,6 +85,8 @@ self.onmessage = async function (e) {
 
       for (let i = 0; i < result.landmarks.length; i++) {
         // MediaPipe labels match physical hands when fed raw (un-mirrored) video
+        const confidence = result.handedness[i][0].score ?? 1;
+        if (confidence < 0.7) continue; // skip low-confidence detections
         const label     = result.handedness[i][0].categoryName; // 'Left' | 'Right'
         const landmarks = result.landmarks[i].map(lm => ({ x: lm.x, y: lm.y, z: lm.z }));
 

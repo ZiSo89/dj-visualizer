@@ -15,8 +15,8 @@ import { applySmoothing, isPinching, isFist, getPalmCenter, getFrameGesture, get
 import { mediapipeToThreeJS } from '../utils/CoordinateMapper.js';
 
 // Webcam resolution — lower = faster MediaPipe inference
-const CAM_W = 640;
-const CAM_H = 480;
+const CAM_W = 320;
+const CAM_H = 240;
 
 const TrackingEngine = {
   cameraAvailable: false,
@@ -66,7 +66,7 @@ const TrackingEngine = {
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: CAM_W, height: CAM_H, facingMode: 'user' }
+        video: { width: CAM_W, height: CAM_H, facingMode: 'user', frameRate: { ideal: 30, max: 30 } }
       });
     } catch (err) {
       console.warn('[TrackingEngine] Camera access denied — tracking disabled:', err.message);

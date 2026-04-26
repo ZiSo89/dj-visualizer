@@ -5,6 +5,9 @@
 // Auto quality manager reserved for Phase 6
 // ─────────────────────────────────────────────────────────────────
 import * as THREE from 'three';
+import { EffectComposer }  from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { state, updateState } from '../core/StateManager.js';
 import { on } from '../core/EventBus.js';
 import { mediapipeToThreeJS } from '../utils/CoordinateMapper.js';
@@ -186,9 +189,12 @@ class HolographicHand {
     const pulseScale = 1 + Math.sin(this.pulsePhase) * 0.05;
     const pinching = handData.pinching;
 
-    // Update landmark positions from raw MediaPipe coords → Three.js
+    // Update landmark positions — track total movement for lazy line updates
+    let moved = 0;
     handData.landmarks.forEach((lm, i) => {
       const { x, y, z } = mediapipeToThreeJS(lm.x, lm.y, lm.z);
+      moved += Math.abs(x - this.landmarkPositions[i].x)
+             + Math.abs(y - this.landmarkPositions[i].y);
       this.landmarkPositions[i].set(x, y, z);
 
       this.spheres[i].position.copy(this.landmarkPositions[i]);
@@ -202,15 +208,19 @@ class HolographicHand {
       );
     });
 
-    // Update connection lines
-    CONNECTIONS.forEach(([a, b], idx) => {
-      const line = this.lines[idx];
-      const positions = line.geometry.attributes.position;
-      positions.setXYZ(0, ...this.landmarkPositions[a].toArray());
-      positions.setXYZ(1, ...this.landmarkPositions[b].toArray());
-      positions.needsUpdate = true;
-      line.visible = true;
-    });
+    // Only update line geometry buffers when landmarks actually moved
+    if (moved > 0.002) {
+      CONNECTIONS.forEach(([a, b], idx) => {
+        const line = this.lines[idx];
+        const positions = line.geometry.attributes.position;
+        positions.setXYZ(0, ...this.landmarkPositions[a].toArray());
+        positions.setXYZ(1, ...this.landmarkPositions[b].toArray());
+        positions.needsUpdate = true;
+        line.visible = true;
+      });
+    } else {
+      this.lines.forEach(l => { l.visible = true; });
+    }
   }
 
   dispose() {
@@ -288,14 +298,14 @@ class ColorSystem {
 // SolarSystem — planets, sun, camera fly-to
 // ════════════════════════════════════════════════════════════════
 const PLANET_DATA = [
-  { name: 'mercury', radius: 0.12, distance:  2.2, orbitSpeed: 0.020,  texture: null,           color: 0x998877 },
-  { name: 'venus',   radius: 0.30, distance:  3.3, orbitSpeed: 0.013,  texture: null,           color: 0xddaa66 },
-  { name: 'earth',   radius: 0.40, distance:  4.8, orbitSpeed: 0.008,  texture: 'earth.jpg',   color: 0x2255aa },
-  { name: 'mars',    radius: 0.22, distance:  6.5, orbitSpeed: 0.005,  texture: 'mars.jpg',    color: 0xcc4422 },
-  { name: 'jupiter', radius: 0.90, distance: 10.0, orbitSpeed: 0.002,  texture: 'jupiter.jpg', color: 0xddaa55 },
-  { name: 'saturn',  radius: 0.75, distance: 14.0, orbitSpeed: 0.0012, texture: null,           color: 0xddcc88 },
-  { name: 'uranus',  radius: 0.55, distance: 18.0, orbitSpeed: 0.0007, texture: null,           color: 0x88ddcc },
-  { name: 'neptune', radius: 0.50, distance: 22.0, orbitSpeed: 0.0005, texture: null,           color: 0x3355ee }
+  { name: 'mercury', radius: 0.12, distance:  2.2, orbitSpeed: 0.020,  rotationSpeed: 0.040, texture: null,           color: 0x998877 },
+  { name: 'venus',   radius: 0.30, distance:  3.3, orbitSpeed: 0.013,  rotationSpeed: 0.008, texture: null,           color: 0xddaa66 },
+  { name: 'earth',   radius: 0.40, distance:  4.8, orbitSpeed: 0.008,  rotationSpeed: 0.030, texture: 'earth.jpg',   color: 0x2255aa },
+  { name: 'mars',    radius: 0.22, distance:  6.5, orbitSpeed: 0.005,  rotationSpeed: 0.029, texture: 'mars.jpg',    color: 0xcc4422 },
+  { name: 'jupiter', radius: 0.90, distance: 10.0, orbitSpeed: 0.002,  rotationSpeed: 0.070, texture: 'jupiter.jpg', color: 0xddaa55 },
+  { name: 'saturn',  radius: 0.75, distance: 14.0, orbitSpeed: 0.0012, rotationSpeed: 0.065, texture: null,           color: 0xddcc88 },
+  { name: 'uranus',  radius: 0.55, distance: 18.0, orbitSpeed: 0.0007, rotationSpeed: 0.050, texture: null,           color: 0x88ddcc },
+  { name: 'neptune', radius: 0.50, distance: 22.0, orbitSpeed: 0.0005, rotationSpeed: 0.040, texture: null,           color: 0x3355ee }
 ];
 // Only textured planets are navigation targets (fist gesture)
 const CAMERA_TARGETS = ['sun', 'earth', 'mars', 'jupiter'];
@@ -316,13 +326,25 @@ class SolarSystem {
     this.sun = new THREE.Mesh(sunGeo, sunMat);
     scene.add(this.sun);
 
-    // Sun glow
-    const glowGeo = new THREE.SphereGeometry(1.8, 16, 16);
-    const glowMat = new THREE.MeshBasicMaterial({
-      color: 0xff6600, transparent: true, opacity: 0.25,
-      blending: THREE.AdditiveBlending, depthWrite: false
-    });
-    this.sunGlow = new THREE.Mesh(glowGeo, glowMat);
+    // Sun glow — camera-facing sprite for realistic corona effect
+    const glowCanvas = document.createElement('canvas');
+    glowCanvas.width = glowCanvas.height = 256;
+    const gc = glowCanvas.getContext('2d');
+    const gg = gc.createRadialGradient(128, 128, 0, 128, 128, 128);
+    gg.addColorStop(0,    'rgba(255, 230, 130, 1.0)');
+    gg.addColorStop(0.15, 'rgba(255, 150,  30, 0.8)');
+    gg.addColorStop(0.4,  'rgba(255,  60,   0, 0.35)');
+    gg.addColorStop(0.7,  'rgba(255,  20,   0, 0.10)');
+    gg.addColorStop(1,    'rgba(0,     0,   0, 0)');
+    gc.fillStyle = gg;
+    gc.fillRect(0, 0, 256, 256);
+    this.sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(glowCanvas),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true
+    }));
+    this.sunGlow.scale.set(12, 12, 1);
     scene.add(this.sunGlow);
 
     // ── Planets ──
@@ -352,6 +374,22 @@ class SolarSystem {
       );
       scene.add(mesh);
       this.planets.push(mesh);
+    }
+
+    // Earth atmosphere — soft blue glow shell
+    const earthAtmIdx = PLANET_DATA.findIndex(p => p.name === 'earth');
+    if (earthAtmIdx >= 0) {
+      const atmGeo = new THREE.SphereGeometry(PLANET_DATA[earthAtmIdx].radius * 1.22, 32, 32);
+      const atmMat = new THREE.MeshBasicMaterial({
+        color: 0x4499ff,
+        transparent: true,
+        opacity: 0.18,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.FrontSide
+      });
+      this.earthAtmosphere = new THREE.Mesh(atmGeo, atmMat);
+      this.planets[earthAtmIdx].add(this.earthAtmosphere);
     }
 
     // Saturn ring — wide, tilted, semi-transparent
@@ -538,7 +576,7 @@ class SolarSystem {
         0,
         Math.sin(this.orbitAngles[i]) * d
       );
-      this.planets[i].rotation.y += 0.005;
+      this.planets[i].rotation.y += PLANET_DATA[i].rotationSpeed;
     }
 
     // Moon orbits Earth
@@ -656,7 +694,7 @@ class SolarSystem {
     this.sun.geometry.dispose();
     this.sun.material.dispose();
     this.scene.remove(this.sunGlow);
-    this.sunGlow.geometry.dispose();
+    this.sunGlow.material.map?.dispose();
     this.sunGlow.material.dispose();
     for (const p of this.planets) {
       this.scene.remove(p);
@@ -792,6 +830,17 @@ const GraphicsEngine = {
     this.colorSystem = new ColorSystem(this.ambientLight, this.sunLight, this.particleSystem, this.scene);
     this.solarSystem = new SolarSystem(this.scene, this.camera, this.colorSystem);
 
+    // EffectComposer + Bloom post-processing
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      0.6,   // strength
+      0.4,   // radius
+      0.78   // threshold — only bright objects (sun, glows) bloom
+    );
+    this.composer.addPass(this.bloomPass);
+
     // Resize + EventBus
     this._boundResize = () => this._onResize();
     window.addEventListener('resize', this._boundResize);
@@ -861,7 +910,7 @@ const GraphicsEngine = {
     this.solarSystem?.update(deltaTime);
     this.colorSystem?.update(deltaTime);
 
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
   },
 
   advanceScene() {
@@ -897,6 +946,7 @@ const GraphicsEngine = {
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
+    this.composer?.setSize(innerWidth, innerHeight);
   },
 
   destroy() {

@@ -39,8 +39,9 @@ const AudioEngine = {
     Tone.Transport.bpm.value = state.bpm;
 
     // ── Signal chain ──────────────────────────────────────────────
-    // Master volume (−6 dB headroom)
-    this.masterVol = new Tone.Volume(-6).toDestination();
+    // Compressor → Master volume (−6 dB headroom)
+    this.compressor = new Tone.Compressor({ threshold: -18, ratio: 4, attack: 0.003, release: 0.25 }).toDestination();
+    this.masterVol = new Tone.Volume(-6).connect(this.compressor);
 
     // Drums → Volume → Filter → Reverb → Master
     this.drumsReverb = new Tone.Reverb({ decay: 2.5, wet: 0 }).connect(this.masterVol);
@@ -72,10 +73,10 @@ const AudioEngine = {
       autostart: false
     }).connect(this.melodyVol);
 
-    // ── Waveform analysers per stem ───────────────────────────────
-    this.drumsWave  = new Tone.Waveform(256);
-    this.bassWave   = new Tone.Waveform(256);
-    this.melodyWave = new Tone.Waveform(256);
+    // ── FFT analysers per stem (64 bins ≈ 344 Hz/bin) ─────────────
+    this.drumsWave  = new Tone.FFT(64);
+    this.bassWave   = new Tone.FFT(64);
+    this.melodyWave = new Tone.FFT(64);
     this.drumsVol.connect(this.drumsWave);
     this.bassVol.connect(this.bassWave);
     this.melodyVol.connect(this.melodyWave);
@@ -153,9 +154,9 @@ const AudioEngine = {
 
   getWaveforms() {
     return {
-      drums:  this.drumsWave?.getValue()  ?? new Float32Array(256),
-      bass:   this.bassWave?.getValue()   ?? new Float32Array(256),
-      melody: this.melodyWave?.getValue() ?? new Float32Array(256)
+      drums:  this.drumsWave?.getValue()  ?? new Float32Array(64),
+      bass:   this.bassWave?.getValue()   ?? new Float32Array(64),
+      melody: this.melodyWave?.getValue() ?? new Float32Array(64)
     };
   },
 
@@ -163,12 +164,37 @@ const AudioEngine = {
     if (typeof Tone === 'undefined' || !state.isPlaying) return;
     const nextBar = Tone.Transport.nextSubdivision('1m');
     Tone.Transport.scheduleOnce((time) => {
-      this.drumsVol.volume.rampTo(-20, 0.1, time);
-      Tone.Transport.scheduleOnce((t2) => {
-        this.drumsVol.volume.rampTo(0, 0.3, t2);
-      }, time + 0.3);
+      this.drumsVol.volume.setValueAtTime(-18, time);
+      this.drumsVol.volume.rampTo(0, 0.35, time + 0.05);
       emit('audio:loopChange');
     }, nextBar);
+  },
+
+  // ── Tap tempo ─────────────────────────────────────────────────
+  _tapTimes: [],
+
+  tapTempo() {
+    if (typeof Tone === 'undefined') return;
+    const now = Date.now();
+    // Reset if more than 3 seconds since last tap
+    if (this._tapTimes.length > 0 && now - this._tapTimes[this._tapTimes.length - 1] > 3000) {
+      this._tapTimes = [];
+    }
+    this._tapTimes.push(now);
+    if (this._tapTimes.length > 4) this._tapTimes.shift();
+    if (this._tapTimes.length >= 2) {
+      const intervals = [];
+      for (let i = 1; i < this._tapTimes.length; i++) {
+        intervals.push(this._tapTimes[i] - this._tapTimes[i - 1]);
+      }
+      const avgMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      const bpm = Math.round(60000 / avgMs);
+      const clamped = Math.max(60, Math.min(200, bpm));
+      Tone.Transport.bpm.rampTo(clamped, 0.1);
+      updateState('bpm', clamped);
+      emit('audio:bpmChange', { bpm: clamped });
+      console.log(`[AudioEngine] tap tempo → ${clamped} BPM`);
+    }
   },
 
   update(deltaTime) {
@@ -191,6 +217,7 @@ const AudioEngine = {
     this.bassReverb?.dispose();
     this.melodyReverb?.dispose();
     this.masterVol?.dispose();
+    this.compressor?.dispose();
   }
 };
 
